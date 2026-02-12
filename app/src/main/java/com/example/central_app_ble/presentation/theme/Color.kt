@@ -1,4 +1,4 @@
-package com.example.central_app_ble.ui.theme
+package com.example.central_app_ble.presentation.theme
 
 import androidx.compose.ui.graphics.Color
 
