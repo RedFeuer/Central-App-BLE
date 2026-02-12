@@ -1,4 +1,4 @@
-package com.example.peripheralapp.ui.theme
+package com.example.peripheralapp.presentation.theme
 
 import androidx.compose.ui.graphics.Color
 
