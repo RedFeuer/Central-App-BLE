@@ -24,3 +24,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "Central-App-BLE"
 include(":app")
+include(":shared")
+include(":peripheralApp")
