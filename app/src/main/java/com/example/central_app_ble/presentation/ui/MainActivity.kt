@@ -75,14 +75,18 @@ class MainActivity : ComponentActivity() {
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-
             setPadding(24, 80, 24, 24)
 
             addView(bScan)
             addView(bConnect)
             addView(bPing)
+
+            addView(bTxStart)
+            addView(bTxStop)
+
             addView(bStreamStart)
             addView(bStreamStop)
+
             addView(ScrollView(this@MainActivity).apply { addView(tv) })
         }
         setContentView(layout)
