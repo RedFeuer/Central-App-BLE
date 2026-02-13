@@ -25,6 +25,13 @@ import com.example.shared.BleUuids
 import com.example.shared.Command
 import com.example.shared.CommandCodec
 import com.example.shared.Protocol
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
 class BlePeripheralServer(
@@ -44,6 +51,43 @@ class BlePeripheralServer(
 
     private lateinit var cmdTxChar: BluetoothGattCharacteristic
     private lateinit var dataTxChar: BluetoothGattCharacteristic
+
+    private val txScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var txJob: Job? = null
+    private var txSeq = 0
+
+    private fun startTxStream() {
+        if (txJob?.isActive == true) return
+
+        txJob = txScope.launch {
+            while (isActive) {
+                val buf = ByteArray(Protocol.STREAM_BLOCK_SIZE)
+
+                // первые 4 байта - счётчик (удобно для отладки потерь/порядка)
+                val s = txSeq++
+                buf[0] = (s and 0xFF).toByte()
+                buf[1] = ((s shr 8) and 0xFF).toByte()
+                buf[2] = ((s shr 16) and 0xFF).toByte()
+                buf[3] = ((s shr 24) and 0xFF).toByte()
+
+                // шлём всем, кто подписался на DATA_TX
+                for (dev in subscribedData) {
+                    notifyData(dev, buf)
+                }
+
+                delay(Protocol.STREAM_PERIOD_MS)
+            }
+        }
+
+        Log.i(logTag, "TX stream started")
+    }
+
+    private fun stopTxStream() {
+        txJob?.cancel()
+        txJob = null
+        Log.i(logTag, "TX stream stopped")
+    }
+
 
     fun isPeripheralSupported(): Boolean {
         val adv = adapter.bluetoothLeAdvertiser
@@ -68,18 +112,18 @@ class BlePeripheralServer(
                 context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
     fun stop() {
-        /* stopAdvertising -> требует BLUETOOTH_ADVERTISE (31+) */
+        txJob?.cancel()
+        txJob = null
+
         try {
             if (hasPermission(Manifest.permission.BLUETOOTH_ADVERTISE)) {
                 advertiser?.stopAdvertising(advCallback)
             }
         } catch (_: SecurityException) {
-            /* permission могли отозвать прямо сейчас */
         } finally {
             advertiser = null
         }
 
-        /* закрыть GATT server -> обычно требует BLUETOOTH_CONNECT (31+) */
         try {
             if (hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
                 gattServer?.close()
@@ -103,7 +147,7 @@ class BlePeripheralServer(
         val cmdRx = BluetoothGattCharacteristic(
             BleUuids.CMD_RX,
             BluetoothGattCharacteristic.PROPERTY_WRITE,
-            BluetoothGattCharacteristic.PERMISSION_WRITE
+            BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED
         )
 
         cmdTxChar = BluetoothGattCharacteristic(
@@ -111,13 +155,18 @@ class BlePeripheralServer(
             BluetoothGattCharacteristic.PROPERTY_NOTIFY,
             BluetoothGattCharacteristic.PERMISSION_READ
         ).apply {
-            addDescriptor(cccdDescriptor())
+            addDescriptor(
+                BluetoothGattDescriptor(
+                    BleUuids.CCCD,
+                    BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED or BluetoothGattDescriptor.PERMISSION_WRITE_ENCRYPTED
+                )
+            )
         }
 
         val dataRx = BluetoothGattCharacteristic(
             BleUuids.DATA_RX,
             BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
-            BluetoothGattCharacteristic.PERMISSION_WRITE
+            BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED
         )
 
         dataTxChar = BluetoothGattCharacteristic(
@@ -125,7 +174,12 @@ class BlePeripheralServer(
             BluetoothGattCharacteristic.PROPERTY_NOTIFY,
             BluetoothGattCharacteristic.PERMISSION_READ
         ).apply {
-            addDescriptor(cccdDescriptor())
+            addDescriptor(
+                BluetoothGattDescriptor(
+                    BleUuids.CCCD,
+                    BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED or BluetoothGattDescriptor.PERMISSION_WRITE_ENCRYPTED
+                )
+            )
         }
 
         service.addCharacteristic(cmdRx)
@@ -230,8 +284,12 @@ class BlePeripheralServer(
                     val cmd = CommandCodec.decode(value)
                     Log.i(logTag, "CMD_RX: $cmd")
 
-                    if (cmd == Command.Ping) {
-                        notifyCmd(device, Command.Pong)
+                    when (cmd) {
+                        Command.Ping -> notifyCmd(device, Command.Pong)
+                        Command.StartStream -> startTxStream()
+                        Command.StopStream -> stopTxStream()
+                        null -> Log.w(logTag, "Unknown CMD_RX bytes=${value.joinToString { "%02X".format(it) }}")
+                        else -> {}
                     }
                 }
 

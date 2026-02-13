@@ -69,6 +69,8 @@ class MainActivity : ComponentActivity() {
         val bScan = Button(this).apply { text = "Scan (5s)" }
         val bConnect = Button(this).apply { text = "Connect" }
         val bPing = Button(this).apply { text = "Ping" }
+        val bTxStart = Button(this).apply { text = "Peripheral TX start" }
+        val bTxStop  = Button(this).apply { text = "Peripheral TX stop" }
         val bStreamStart = Button(this).apply { text = "Stream start" }
         val bStreamStop  = Button(this).apply { text = "Stream stop" }
 
@@ -98,6 +100,29 @@ class MainActivity : ComponentActivity() {
         bPing.setOnClickListener {
             if (!ensurePermsOrRequest()) return@setOnClickListener
             scope.launch { sendPing() }
+        }
+        bTxStart.setOnClickListener {
+            if (!ensurePermsOrRequest()) return@setOnClickListener
+            scope.launch {
+                try {
+                    gattClient?.writeCmd(CommandCodec.encode(Command.StartStream))
+                    log("StartStream sent")
+                } catch (e: Exception) {
+                    log("StartStream failed: ${e.message}")
+                }
+            }
+        }
+
+        bTxStop.setOnClickListener {
+            if (!ensurePermsOrRequest()) return@setOnClickListener
+            scope.launch {
+                try {
+                    gattClient?.writeCmd(CommandCodec.encode(Command.StopStream))
+                    log("StopStream sent")
+                } catch (e: Exception) {
+                    log("StopStream failed: ${e.message}")
+                }
+            }
         }
         bStreamStart.setOnClickListener {
             if (!ensurePermsOrRequest()) return@setOnClickListener
@@ -165,7 +190,21 @@ class MainActivity : ComponentActivity() {
     private suspend fun connect() {
         val dev = foundDevice.get() ?: run { log("Сначала Scan"); return }
 
-        val client = SimpleGattClient(this, dev) { log(it) } // теперь log безопасный
+        /* если нажать Connect второй раз — закроется старое соединение */
+        gattClient?.close()
+        gattClient = null
+        isReady = false
+
+        try {
+            Bonding(this).ensureBonded(dev)
+            log("BONDED OK")
+        } catch (e: Exception) {
+            log("BOND FAILED: ${e.message}")
+            log("Если ранее уже спаривались — удали пару в настройках Bluetooth на ОБОИХ устройствах и попробуй снова.")
+            return
+        }
+
+        val client = SimpleGattClient(this, dev) { log(it) }
         gattClient = client
 
         try {

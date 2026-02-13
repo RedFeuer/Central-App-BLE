@@ -78,6 +78,14 @@ class SimpleGattClient(
         }
     }
 
+    private fun readSeq(v: ByteArray): Int {
+        if (v.size < 4) return -1
+        return (v[0].toInt() and 0xFF) or
+                ((v[1].toInt() and 0xFF) shl 8) or
+                ((v[2].toInt() and 0xFF) shl 16) or
+                ((v[3].toInt() and 0xFF) shl 24)
+    }
+
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     suspend fun connectAndInit() {
         checkConnectPermission()
