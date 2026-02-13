@@ -2,6 +2,14 @@ package com.example.central_app_ble.presentation.viewModel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.central_app_ble.data.repositoryImpl.BleRepositoryImpl
+import com.example.central_app_ble.domain.domainModel.ConnectionState
+import com.example.central_app_ble.domain.useCase.CentralStreamUseCase
+import com.example.central_app_ble.domain.useCase.ConnectUseCase
+import com.example.central_app_ble.domain.useCase.ObserveLogsUseCase
+import com.example.central_app_ble.domain.useCase.PeripheralTxControlUseCase
+import com.example.central_app_ble.domain.useCase.PingUseCase
+import com.example.central_app_ble.domain.useCase.ScanUseCase
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,7 +21,7 @@ import kotlinx.coroutines.launch
 class UiViewModel(
     private val scanUseCase: ScanUseCase,
     private val connectUseCase: ConnectUseCase,
-    private val sendPingUseCase: SendPingUseCase,
+    private val pingUseCase: PingUseCase,
     private val centralStreamUseCase: CentralStreamUseCase,
     private val peripheralTxControlUseCase: PeripheralTxControlUseCase,
     private val observeLogsUseCase: ObserveLogsUseCase,
@@ -82,7 +90,7 @@ class UiViewModel(
             return@launch
         }
         try {
-            sendPingUseCase()
+            pingUseCase()
             _logs.tryEmit("PING sent")
         } catch (e: Exception) {
             _logs.tryEmit("PING failed: ${e.message}")
