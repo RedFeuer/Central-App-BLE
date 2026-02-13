@@ -10,6 +10,7 @@ import com.example.central_app_ble.domain.useCase.ObserveLogsUseCase
 import com.example.central_app_ble.domain.useCase.PeripheralTxControlUseCase
 import com.example.central_app_ble.domain.useCase.PingUseCase
 import com.example.central_app_ble.domain.useCase.ScanUseCase
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
