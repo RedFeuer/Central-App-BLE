@@ -3,12 +3,19 @@ package com.example.central_app_ble.presentation.ui
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
-import android.bluetooth.le.*
+import android.bluetooth.le.BluetoothLeScanner
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelUuid
-import android.widget.*
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresPermission
@@ -17,7 +24,15 @@ import com.example.shared.BleUuids
 import com.example.shared.Command
 import com.example.shared.CommandCodec
 import com.example.shared.Protocol
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicReference
 
 class MainActivity : ComponentActivity() {
@@ -32,6 +47,8 @@ class MainActivity : ComponentActivity() {
     private var gattClient: SimpleGattClient? = null
 
     private var isReady = false // флаг проверки, что connect завершен и можно пинговать или стримить
+
+    private var streamJob: Job? = null
 
     private val blePerms31 = arrayOf(
         Manifest.permission.BLUETOOTH_SCAN,
@@ -52,7 +69,8 @@ class MainActivity : ComponentActivity() {
         val bScan = Button(this).apply { text = "Scan (5s)" }
         val bConnect = Button(this).apply { text = "Connect" }
         val bPing = Button(this).apply { text = "Ping" }
-        val bStream = Button(this).apply { text = "Stream 10s" }
+        val bStreamStart = Button(this).apply { text = "Stream start" }
+        val bStreamStop  = Button(this).apply { text = "Stream stop" }
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -62,11 +80,13 @@ class MainActivity : ComponentActivity() {
             addView(bScan)
             addView(bConnect)
             addView(bPing)
-            addView(bStream)
+            addView(bStreamStart)
+            addView(bStreamStop)
             addView(ScrollView(this@MainActivity).apply { addView(tv) })
         }
         setContentView(layout)
 
+        /* обработка кнопок  */
         bScan.setOnClickListener {
             if (!ensurePermsOrRequest()) return@setOnClickListener
             startScan5s()
@@ -79,10 +99,18 @@ class MainActivity : ComponentActivity() {
             if (!ensurePermsOrRequest()) return@setOnClickListener
             scope.launch { sendPing() }
         }
-        bStream.setOnClickListener {
+        bStreamStart.setOnClickListener {
             if (!ensurePermsOrRequest()) return@setOnClickListener
-            scope.launch { stream10s() }
+            if (streamJob?.isActive == true) { log("stream already running"); return@setOnClickListener }
+            streamJob = scope.launch { stream10s() }
         }
+
+        bStreamStop.setOnClickListener {
+            streamJob?.cancel()
+            streamJob = null
+            log("stream stopped")
+        }
+
     }
 
     private fun hasBlePerms(): Boolean {
@@ -160,13 +188,12 @@ class MainActivity : ComponentActivity() {
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private suspend fun stream10s() {
-        if (!isReady) { log("Not ready: сначала Connect и дождись INIT OK"); return }
         val c = gattClient ?: run { log("not connected"); return }
-
         val start = System.currentTimeMillis()
         var sent = 0
 
-        while (System.currentTimeMillis() - start < 10_000) {
+        /* isActive чтобы цикл следил за job.cancel */
+        while (currentCoroutineContext().isActive && System.currentTimeMillis() - start < 10_000) {
             val buf = ByteArray(Protocol.STREAM_BLOCK_SIZE) { (it and 0xFF).toByte() }
             c.writeDataNoResp(buf)
             sent++

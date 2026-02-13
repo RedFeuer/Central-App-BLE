@@ -1,7 +1,13 @@
 package com.example.centralapp
 
 import android.Manifest
-import android.bluetooth.*
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
+import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -29,6 +35,8 @@ class SimpleGattClient(
     private val mtuChanged = CompletableDeferred<Int>()
     private val descWritten = CompletableDeferred<UUID>()
 
+    private var descWriteWaiter: CompletableDeferred<Pair<UUID, Int>>? = null
+
     private val cb = object : BluetoothGattCallback() {
 
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
@@ -50,7 +58,8 @@ class SimpleGattClient(
 
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             log("descWrite char=${descriptor.characteristic.uuid} status=$status")
-            if (status == BluetoothGatt.GATT_SUCCESS) descWritten.complete(descriptor.characteristic.uuid)
+            descWriteWaiter?.complete(descriptor.characteristic.uuid to status)
+            descWriteWaiter = null
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic) {
@@ -132,16 +141,20 @@ class SimpleGattClient(
 
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private fun enableNotify(ch: BluetoothGattCharacteristic) {
+    private suspend fun enableNotify(ch: BluetoothGattCharacteristic) {
         val g = gatt ?: error("no gatt")
 
-        val notifOk = g.setCharacteristicNotification(ch, true)
-        require(notifOk) { "setCharacteristicNotification failed uuid=${ch.uuid}" }
+        require(g.setCharacteristicNotification(ch, true)) {
+            "setCharacteristicNotification failed uuid=${ch.uuid}"
+        }
 
         val cccd = ch.getDescriptor(BleUuids.CCCD) ?: error("CCCD missing uuid=${ch.uuid}")
         val value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
 
-        val writeOk: Boolean = if (Build.VERSION.SDK_INT >= 33) {
+        val waiter = CompletableDeferred<Pair<UUID, Int>>()
+        descWriteWaiter = waiter
+
+        val started: Boolean = if (Build.VERSION.SDK_INT >= 33) {
             g.writeDescriptor(cccd, value) == BluetoothStatusCodes.SUCCESS
         } else {
             @Suppress("DEPRECATION")
@@ -150,7 +163,11 @@ class SimpleGattClient(
             g.writeDescriptor(cccd)
         }
 
-        require(writeOk) { "writeDescriptor start failed uuid=${ch.uuid}" }
+        require(started) { "writeDescriptor start failed uuid=${ch.uuid}" }
+
+        val (uuid, status) = withTimeout(10_000) { waiter.await() }
+        require(uuid == ch.uuid) { "Descriptor write mismatch: expected=${ch.uuid} got=$uuid" }
+        require(status == BluetoothGatt.GATT_SUCCESS) { "Descriptor write status=$status uuid=$uuid" }
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
