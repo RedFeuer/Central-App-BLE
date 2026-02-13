@@ -53,6 +53,7 @@ dependencies {
     implementation(project(":shared"))
     implementation(libs.androidx.material3)
     implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.bluetooth)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
