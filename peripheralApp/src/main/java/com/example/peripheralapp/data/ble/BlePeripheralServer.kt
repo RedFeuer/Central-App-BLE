@@ -36,9 +36,12 @@ import java.util.concurrent.ConcurrentHashMap
 
 class BlePeripheralServer(
     private val context: Context,
-    private val deviceName: String = "BLE-Peripheral"
+    private val deviceName: String = "BLE-Peripheral",
+    private val logger: (String) -> Unit = { android.util.Log.i("BlePeripheral", it) },
 ) {
     private val logTag = "BlePeripheral"
+
+    private fun log(s: String) = logger("$logTag $s")
 
     private val btManager = context.getSystemService(BluetoothManager::class.java)
     private val adapter: BluetoothAdapter = btManager.adapter
@@ -60,6 +63,7 @@ class BlePeripheralServer(
         if (txJob?.isActive == true) return
 
         txJob = txScope.launch {
+            var tick = 0
             while (isActive) {
                 val buf = ByteArray(Protocol.STREAM_BLOCK_SIZE)
 
@@ -70,6 +74,10 @@ class BlePeripheralServer(
                 buf[2] = ((s shr 16) and 0xFF).toByte()
                 buf[3] = ((s shr 24) and 0xFF).toByte()
 
+                if (tick++ % 16 == 0) { // примерно раз в 1секунду = 16*60ms
+                    Log.i(logTag, "TX tick seq=$s subscribedData=${subscribedData.size}")
+                }
+
                 // шлём всем, кто подписался на DATA_TX
                 for (dev in subscribedData) {
                     notifyData(dev, buf)
@@ -79,7 +87,7 @@ class BlePeripheralServer(
             }
         }
 
-        Log.i(logTag, "TX stream started")
+        log("TX stream started; subscribedData=${subscribedData.size}")
     }
 
     private fun stopTxStream() {
@@ -260,6 +268,7 @@ class BlePeripheralServer(
                 BleUuids.CMD_TX -> if (enabled) subscribedCmd.add(device) else subscribedCmd.remove(device)
                 BleUuids.DATA_TX -> if (enabled) subscribedData.add(device) else subscribedData.remove(device)
             }
+            Log.i(logTag, "CCCD write for $charUuid enabled=$enabled subCmd=${subscribedCmd.size} subData=${subscribedData.size}")
 
             if (responseNeeded) {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
@@ -281,25 +290,25 @@ class BlePeripheralServer(
             when (characteristic.uuid) {
 
                 BleUuids.CMD_RX -> {
+                    val hex = value.joinToString(" ") { "%02X".format(it) }
                     val cmd = CommandCodec.decode(value)
-                    Log.i(logTag, "CMD_RX: $cmd")
+                    Log.i(logTag, "CMD_RX raw=[$hex] decoded=$cmd")
 
                     when (cmd) {
                         Command.Ping -> notifyCmd(device, Command.Pong)
                         Command.StartStream -> startTxStream()
                         Command.StopStream -> stopTxStream()
-                        null -> Log.w(logTag, "Unknown CMD_RX bytes=${value.joinToString { "%02X".format(it) }}")
+                        null -> Log.w(logTag, "CMD_RX unknown bytes=[$hex]")
                         else -> {}
                     }
                 }
 
                 BleUuids.DATA_RX -> {
-                    // Здесь приходит поток данных (ожидаем 160 байт)
+                    Log.i(logTag, "DATA_RX size=${value.size}")
                     if (value.size == Protocol.STREAM_BLOCK_SIZE) {
-                        // Для проверки: эхо назад по notify
-                        notifyData(device, value)
+                        notifyData(device, value) // эхо
                     } else {
-                        Log.w(logTag, "DATA_RX size=${value.size} (ожидалось 160)")
+                        Log.w(logTag, "DATA_RX wrong size=${value.size}")
                     }
                 }
             }

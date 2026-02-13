@@ -1,4 +1,4 @@
-package com.example.centralapp
+package com.example.central_app_ble.presentation.ui
 
 import android.Manifest
 import android.bluetooth.BluetoothDevice
@@ -18,7 +18,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeout
 import java.util.UUID
 
-class SimpleGattClient(
+class GattClient(
     private val context: Context,
     private val device: BluetoothDevice,
     private val log: (String) -> Unit
@@ -63,17 +63,18 @@ class SimpleGattClient(
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic) {
-            val v = ch.value ?: return
-            when (ch.uuid) {
-                BleUuids.CMD_TX -> log("NOTIFY CMD_TX: ${CommandCodec.decode(v)} raw=${v.joinToString()}")
-                BleUuids.DATA_TX -> log("NOTIFY DATA_TX size=${v.size}")
-            }
+            @Suppress("DEPRECATION")
+            handleNotify(ch, ch.value ?: byteArrayOf())
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray) {
+            handleNotify(ch, value)
+        }
+
+        private fun handleNotify(ch: BluetoothGattCharacteristic, value: ByteArray) {
             when (ch.uuid) {
-                BleUuids.CMD_TX -> log("NOTIFY CMD_TX: ${CommandCodec.decode(value)}")
-                BleUuids.DATA_TX -> log("NOTIFY DATA_TX size=${value.size}")
+                BleUuids.CMD_TX -> log("RX CMD_TX: ${CommandCodec.decode(value)}")
+                BleUuids.DATA_TX -> log("RX DATA_TX size=${value.size}")
             }
         }
     }
@@ -116,6 +117,9 @@ class SimpleGattClient(
         // enable notify on CMD_TX + DATA_TX
         enableNotify(cmdTx!!)
         enableNotify(dataTx!!)
+
+        log("notify enabled CMD_TX")
+        log("notify enabled DATA_TX")
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)

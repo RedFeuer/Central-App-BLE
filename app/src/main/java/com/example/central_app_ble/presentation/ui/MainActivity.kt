@@ -19,7 +19,6 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresPermission
-import com.example.centralapp.SimpleGattClient
 import com.example.shared.BleUuids
 import com.example.shared.Command
 import com.example.shared.CommandCodec
@@ -44,7 +43,7 @@ class MainActivity : ComponentActivity() {
     private val scanner: BluetoothLeScanner by lazy { adapter.bluetoothLeScanner }
 
     private val foundDevice = AtomicReference<BluetoothDevice?>(null)
-    private var gattClient: SimpleGattClient? = null
+    private var gattClient: GattClient? = null
 
     private var isReady = false // флаг проверки, что connect завершен и можно пинговать или стримить
 
@@ -204,7 +203,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        val client = SimpleGattClient(this, dev) { log(it) }
+        val client = GattClient(this, dev) { log(it) }
         gattClient = client
 
         try {
