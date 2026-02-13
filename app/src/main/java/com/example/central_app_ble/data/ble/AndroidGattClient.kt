@@ -3,6 +3,7 @@ package com.example.central_app_ble.data.ble
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
@@ -13,7 +14,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.annotation.RequiresPermission
-import androidx.bluetooth.BluetoothDevice
 import com.example.central_app_ble.data.ble.callback.GattEventBus
 import com.example.central_app_ble.domain.domainModel.BleNotification
 import com.example.shared.BleUuids
