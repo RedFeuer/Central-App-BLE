@@ -25,6 +25,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.central_app_ble.presentation.permissions.BlePermissionGate
+import com.example.central_app_ble.presentation.viewModel.UiEvent
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,7 +84,7 @@ fun AppRoot() {
                     modifier = Modifier.weight(1f),
                     onClick = {
                         if (!permGate.ensurePermsOrRequest()) return@Button
-                        viewModel.onEvent(MainUiEvent.ScanClicked)
+                        viewModel.onEvent(UiEvent.ScanClicked)
                     }
                 ) { Text("Scan (5s)") }
 
@@ -90,7 +92,7 @@ fun AppRoot() {
                     modifier = Modifier.weight(1f),
                     onClick = {
                         if (!permGate.ensurePermsOrRequest()) return@Button
-                        viewModel.onEvent(MainUiEvent.ConnectClicked)
+                        viewModel.onEvent(UiEvent.ConnectClicked)
                     }
                 ) { Text("Connect") }
             }
@@ -100,7 +102,7 @@ fun AppRoot() {
                     modifier = Modifier.weight(1f),
                     onClick = {
                         if (!permGate.ensurePermsOrRequest()) return@Button
-                        viewModel.onEvent(MainUiEvent.PingClicked)
+                        viewModel.onEvent(UiEvent.PingClicked)
                     }
                 ) { Text("Ping") }
 
@@ -108,7 +110,7 @@ fun AppRoot() {
                     modifier = Modifier.weight(1f),
                     onClick = {
                         if (!permGate.ensurePermsOrRequest()) return@Button
-                        viewModel.onEvent(MainUiEvent.CentralStreamStartClicked)
+                        viewModel.onEvent(UiEvent.CentralStreamStartClicked)
                     }
                 ) { Text("Stream start") }
             }
@@ -116,14 +118,14 @@ fun AppRoot() {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
                     modifier = Modifier.weight(1f),
-                    onClick = { viewModel.onEvent(MainUiEvent.CentralStreamStopClicked) }
+                    onClick = { viewModel.onEvent(UiEvent.CentralStreamStopClicked) }
                 ) { Text("Stream stop") }
 
                 Button(
                     modifier = Modifier.weight(1f),
                     onClick = {
                         if (!permGate.ensurePermsOrRequest()) return@Button
-                        viewModel.onEvent(MainUiEvent.PeripheralTxStartClicked)
+                        viewModel.onEvent(UiEvent.PeripheralTxStartClicked)
                     }
                 ) { Text("Peripheral TX start") }
             }
@@ -133,7 +135,7 @@ fun AppRoot() {
                     modifier = Modifier.weight(1f),
                     onClick = {
                         if (!permGate.ensurePermsOrRequest()) return@Button
-                        viewModel.onEvent(MainUiEvent.PeripheralTxStopClicked)
+                        viewModel.onEvent(UiEvent.PeripheralTxStopClicked)
                     }
                 ) { Text("Peripheral TX stop") }
 
