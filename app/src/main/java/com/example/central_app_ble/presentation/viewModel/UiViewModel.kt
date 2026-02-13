@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+@HiltViewModel
 class UiViewModel(
     private val scanUseCase: ScanUseCase,
     private val connectUseCase: ConnectUseCase,
