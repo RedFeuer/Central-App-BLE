@@ -10,6 +10,7 @@ import com.example.central_app_ble.data.ble.callback.GattEvent
 import com.example.central_app_ble.data.ble.callback.GattEventBus
 import com.example.central_app_ble.data.mapper.BluetoothDeviceMapper
 import com.example.central_app_ble.domain.domainModel.BleDevice
+import com.example.central_app_ble.domain.domainModel.BleNotification
 import com.example.central_app_ble.domain.domainModel.ConnectionState
 import com.example.central_app_ble.domain.repository.BleRepository
 import com.example.shared.Command
