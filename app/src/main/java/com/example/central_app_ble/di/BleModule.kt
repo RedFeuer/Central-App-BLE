@@ -5,6 +5,8 @@ import com.example.central_app_ble.data.repositoryImpl.BleRepositoryImpl
 import com.example.central_app_ble.domain.repository.BleRepository
 import com.example.central_app_ble.domain.useCase.CentralStreamUseCase
 import com.example.central_app_ble.domain.useCase.ConnectUseCase
+import com.example.central_app_ble.domain.useCase.DisconnectUseCase
+import com.example.central_app_ble.domain.useCase.ObserveConnectionStateUseCase
 import com.example.central_app_ble.domain.useCase.ObserveLogsUseCase
 import com.example.central_app_ble.domain.useCase.ObserveNotificationsUseCase
 import com.example.central_app_ble.domain.useCase.PeripheralTxControlUseCase
@@ -25,10 +27,6 @@ abstract class BleModule {
     abstract fun bindBleRepository(impl: BleRepositoryImpl) : BleRepository
 
     companion object {
-//        @Provides
-//        @Singleton
-//        fun provideGattEventBus() :
-
         @Provides
         @Singleton
         fun provideScanUseCase(repository: BleRepository) : ScanUseCase {
@@ -69,6 +67,18 @@ abstract class BleModule {
         @Singleton
         fun provideObserveLogsUseCase(repository: BleRepository) : ObserveLogsUseCase {
             return ObserveLogsUseCase(repository)
+        }
+
+        @Provides
+        @Singleton
+        fun provideObserveConnectionStateUseCase(repository: BleRepository) : ObserveConnectionStateUseCase {
+            return ObserveConnectionStateUseCase(repository)
+        }
+
+        @Provides
+        @Singleton
+        fun provideDisconnectUseCase(repository: BleRepository) : DisconnectUseCase {
+            return DisconnectUseCase(repository)
         }
     }
 }
