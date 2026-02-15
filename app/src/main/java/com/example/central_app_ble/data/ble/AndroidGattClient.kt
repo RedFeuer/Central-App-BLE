@@ -18,13 +18,16 @@ import com.example.central_app_ble.data.ble.callback.GattEventBus
 import com.example.central_app_ble.domain.domainModel.BleNotification
 import com.example.shared.BleUuids
 import com.example.shared.CommandCodec
+import dagger.assisted.Assisted
+import dagger.assisted.AssistedInject
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeout
 import java.util.UUID
 
-class AndroidGattClient(
-    private val context: Context,
-    address: String,
+class AndroidGattClient @AssistedInject constructor(
+    @ApplicationContext private val context: Context,
+    @Assisted("address") address: String,
     private val bus: GattEventBus,
 ) {
     private val device: BluetoothDevice =

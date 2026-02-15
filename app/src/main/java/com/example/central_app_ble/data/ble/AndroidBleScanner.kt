@@ -9,7 +9,6 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
-import android.content.Context
 import android.os.ParcelUuid
 import androidx.annotation.RequiresPermission
 import com.example.shared.BleUuids
@@ -17,9 +16,10 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withTimeoutOrNull
+import javax.inject.Inject
 
-class AndroidBleScanner(
-    context: Context,
+class AndroidBleScanner @Inject constructor(
+    // @ApplicationContext context: Context,
 ) {
     private val adapter: BluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
     private val scanner: BluetoothLeScanner by lazy { adapter.bluetoothLeScanner }

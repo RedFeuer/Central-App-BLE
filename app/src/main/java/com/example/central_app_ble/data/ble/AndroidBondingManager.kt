@@ -11,11 +11,13 @@ import android.content.IntentFilter
 import android.os.Build
 import androidx.annotation.RequiresPermission
 import com.example.central_app_ble.data.ble.callback.GattEventBus
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeout
+import javax.inject.Inject
 
-class AndroidBondingManager(
-    private val context: Context,
+class AndroidBondingManager @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val bus: GattEventBus, // шина
 ) {
     private val adapter: BluetoothAdapter = BluetoothAdapter.getDefaultAdapter()

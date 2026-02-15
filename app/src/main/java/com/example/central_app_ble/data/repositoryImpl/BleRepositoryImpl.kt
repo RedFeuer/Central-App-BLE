@@ -6,6 +6,7 @@ import androidx.annotation.RequiresPermission
 import com.example.central_app_ble.data.ble.AndroidBleScanner
 import com.example.central_app_ble.data.ble.AndroidBondingManager
 import com.example.central_app_ble.data.ble.AndroidGattClient
+import com.example.central_app_ble.data.ble.callback.AndroidGattClientFactory
 import com.example.central_app_ble.data.ble.callback.GattEvent
 import com.example.central_app_ble.data.ble.callback.GattEventBus
 import com.example.central_app_ble.data.mapper.BluetoothDeviceMapper
@@ -15,18 +16,21 @@ import com.example.central_app_ble.domain.domainModel.ConnectionState
 import com.example.central_app_ble.domain.repository.BleRepository
 import com.example.shared.Command
 import com.example.shared.CommandCodec
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.map
+import javax.inject.Inject
 
-class BleRepositoryImpl(
-    private val appContext: Context,
+class BleRepositoryImpl @Inject constructor (
+    @ApplicationContext private val appContext: Context,
+    private val bus: GattEventBus, /* шина Gatt */
+    private val scanner: AndroidBleScanner,
+    private val bonding: AndroidBondingManager,
+    private val gattFactory: AndroidGattClientFactory, // фабрика для создания gattClient
 ) : BleRepository {
-    /* шина Gatt */
-    private val bus = GattEventBus()
-
     override val logs: Flow<String> =
         bus.events.filterIsInstance<GattEvent.Log>().map { it.line }
 
@@ -35,9 +39,6 @@ class BleRepositoryImpl(
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     override val connectionState: StateFlow<ConnectionState> = _connectionState
-
-    private val scanner = AndroidBleScanner(appContext)
-    private val bonding = AndroidBondingManager(appContext, bus)
 
     private var gattClient: AndroidGattClient? = null
 
@@ -68,11 +69,8 @@ class BleRepositoryImpl(
 
         _connectionState.value = ConnectionState.Connecting
 
-        val client = AndroidGattClient(
-            context = appContext,
-            address = device.address,
-            bus = bus
-        )
+        /* создаем клиента через фабрику */
+        val client = gattFactory.create(device.address)
         gattClient = client
 
         try {

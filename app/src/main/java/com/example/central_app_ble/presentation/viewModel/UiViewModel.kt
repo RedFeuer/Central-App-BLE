@@ -11,6 +11,7 @@ import com.example.central_app_ble.domain.useCase.PeripheralTxControlUseCase
 import com.example.central_app_ble.domain.useCase.PingUseCase
 import com.example.central_app_ble.domain.useCase.ScanUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import jakarta.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,7 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 @HiltViewModel
-class UiViewModel(
+class UiViewModel @Inject constructor(
     private val scanUseCase: ScanUseCase,
     private val connectUseCase: ConnectUseCase,
     private val pingUseCase: PingUseCase,
