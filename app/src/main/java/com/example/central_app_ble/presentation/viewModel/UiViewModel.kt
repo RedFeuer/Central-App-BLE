@@ -41,9 +41,11 @@ class UiViewModel @Inject constructor(
     private var streamJob: Job? = null
 
     init {
+        /* реактивное отображение логов */
         viewModelScope.launch {
             observeLogsUseCase().collect { _logs.tryEmit(it) }
         }
+        /* реактивное отображение работы Central устройства */
         viewModelScope.launch {
             observeConnectionStateUseCase().collect { connectionState ->
                 _state.value = _state.value.copy(connectionState = connectionState)
@@ -51,6 +53,7 @@ class UiViewModel @Inject constructor(
         }
     }
 
+    /* обработчик кнопок и вызов методов */
     fun onEvent(e: UiEvent) {
         when (e) {
             UiEvent.ScanClicked -> scan()
@@ -65,6 +68,7 @@ class UiViewModel @Inject constructor(
         }
     }
 
+    /* добавляет строчку в логи */
     fun log(line: String) {
         _logs.tryEmit(line)
     }

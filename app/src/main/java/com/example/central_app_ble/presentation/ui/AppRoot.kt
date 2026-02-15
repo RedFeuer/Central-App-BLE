@@ -209,6 +209,7 @@ private fun rememberRunWithBlePerms(
     ) { result ->
         log("permissions result: $result")
 
+        /* если все permission'ы выданы, то выполняем отложенное событие */
         val allGranted = result.values.all { it }
         if (allGranted) {
             pendingEvent?.let { event ->
@@ -229,9 +230,14 @@ private fun rememberRunWithBlePerms(
 
     return { event ->
         if (permGate.ensurePermsOrRequest()) {
+            /* разрешения есть */
             onEvent(event)
+            pendingEvent = null // на всякий случай очищаем отложенное событие, чтобы потом не выполнилось
         }
-        pendingEvent = event
+        else {
+            /* разрешений нет */
+            pendingEvent = event // отклыдываем и выполним позже
+        }
     }
 }
 

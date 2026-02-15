@@ -18,9 +18,7 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
-class AndroidBleScanner @Inject constructor(
-    // @ApplicationContext context: Context,
-) {
+class AndroidBleScanner () {
     private val adapter: BluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
     private val scanner: BluetoothLeScanner by lazy { adapter.bluetoothLeScanner }
 
@@ -29,10 +27,12 @@ class AndroidBleScanner @Inject constructor(
     @SuppressLint("SupportAnnotationUsage")
     @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     suspend fun scanFirst(timeoutMs: Long): Result? {
+        /* фильтруем и берем только устройства с UUID = BleUuids.SERVICE */
         val filter = ScanFilter.Builder()
             .setServiceUuid(ParcelUuid(BleUuids.SERVICE))
             .build()
 
+        /* настройки сканера */
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
@@ -40,7 +40,7 @@ class AndroidBleScanner @Inject constructor(
         val flow = callbackFlow {
             val callback = object : ScanCallback() {
                 override fun onScanResult(callbackType: Int, result: ScanResult) {
-                    trySend(Result(result.device, result.rssi))
+                    trySend(Result(result.device, result.rssi)) // нашли девайс
                 }
                 override fun onScanFailed(errorCode: Int) {
                     close() // просто завершаем без результата
@@ -49,13 +49,15 @@ class AndroidBleScanner @Inject constructor(
 
             scanner.startScan(listOf(filter), settings, callback)
 
-            awaitClose {
+            awaitClose { // остановит скан при превышении timeoutMs в withTimeoutOrNull
                 runCatching { scanner.stopScan(callback) }
             }
         }
 
+        /* не укладываемся в тайминги или в потоке нет элементо - null + закрытие flow,
+        * иначе - первый найденный Result из потока */
         return withTimeoutOrNull(timeoutMs) {
-            flow.firstOrNull()
+            flow.firstOrNull() // возвращаем первый найденный сразу как получили его
         }
     }
 }

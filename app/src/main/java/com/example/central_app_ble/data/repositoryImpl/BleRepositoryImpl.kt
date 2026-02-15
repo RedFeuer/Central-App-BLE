@@ -44,18 +44,18 @@ class BleRepositoryImpl @Inject constructor (
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     override suspend fun scanFirst(timeoutMs: Long): BleDevice? {
-        _connectionState.value = ConnectionState.Scanning
+        _connectionState.value = ConnectionState.Scanning // сканируем
         bus.log("scan start")
 
-        val res = scanner.scanFirst(timeoutMs)
+        val res = scanner.scanFirst(timeoutMs) // вызов сканнера
         val dev = if (res != null) {
-            val mapped = BluetoothDeviceMapper.toDomain(res.device, res.rssi)
-            bus.log("FOUND: name=${mapped.name} addr=${mapped.address} rssi=${mapped.rssi}")
-            mapped
+            val domainModel: BleDevice = BluetoothDeviceMapper.toDomain(res.device, res.rssi)
+            bus.log("FOUND: name=${domainModel.name} addr=${domainModel.address} rssi=${domainModel.rssi}")
+            domainModel
         } else null
 
         bus.log("scan stop; selected=${dev?.address ?: "none"}")
-        _connectionState.value = ConnectionState.Idle
+        _connectionState.value = ConnectionState.Idle // ожидание действий
         return dev
     }
 
