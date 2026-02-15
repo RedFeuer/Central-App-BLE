@@ -1,5 +1,6 @@
 package com.example.central_app_ble.presentation.ui
 
+import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -22,10 +23,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.central_app_ble.presentation.permissions.BlePermissionGate
@@ -36,6 +41,11 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppRoot() {
+    val appContext = LocalContext.current
+
+    /* действие пользователя */
+    var pendingEvent by remember { mutableStateOf<UiEvent?>(null) }
+
     val viewModel = hiltViewModel<UiViewModel>()
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -47,12 +57,32 @@ fun AppRoot() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         viewModel.log("perm result: $result")
+
+        val allGranted = result.values.all { it }
+        if (allGranted) {
+            pendingEvent?.let { e ->
+                pendingEvent = null
+                viewModel.onEvent(e)
+            }
+        }
     }
 
     val permGate = remember {
         BlePermissionGate(
-            request = { permsLauncher.launch(it) }
+            request = { permsLauncher.launch(it) },
+            isGranted = { permission ->
+                ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
+            }
         )
+    }
+
+    /* обработчик кнопки */
+    fun runWithBlePerms(event: UiEvent) {
+        if (permGate.ensurePermsOrRequest()) {
+            viewModel.onEvent(event)
+        } else {
+            pendingEvent = event
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -87,36 +117,24 @@ fun AppRoot() {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
                     modifier = Modifier.weight(1f),
-                    onClick = {
-                        if (!permGate.ensurePermsOrRequest()) return@Button
-                        viewModel.onEvent(UiEvent.ScanClicked)
-                    }
+                    onClick = { runWithBlePerms(UiEvent.ScanClicked) }
                 ) { Text("Scan (5s)") }
 
                 Button(
                     modifier = Modifier.weight(1f),
-                    onClick = {
-                        if (!permGate.ensurePermsOrRequest()) return@Button
-                        viewModel.onEvent(UiEvent.ConnectClicked)
-                    }
+                    onClick = { runWithBlePerms(UiEvent.ConnectClicked) }
                 ) { Text("Connect") }
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
                     modifier = Modifier.weight(1f),
-                    onClick = {
-                        if (!permGate.ensurePermsOrRequest()) return@Button
-                        viewModel.onEvent(UiEvent.PingClicked)
-                    }
+                    onClick = {runWithBlePerms(UiEvent.PingClicked)}
                 ) { Text("Ping") }
 
                 Button(
                     modifier = Modifier.weight(1f),
-                    onClick = {
-                        if (!permGate.ensurePermsOrRequest()) return@Button
-                        viewModel.onEvent(UiEvent.CentralStreamStartClicked)
-                    }
+                    onClick = { runWithBlePerms(UiEvent.CentralStreamStartClicked) }
                 ) { Text("Stream start") }
             }
 
@@ -128,20 +146,14 @@ fun AppRoot() {
 
                 Button(
                     modifier = Modifier.weight(1f),
-                    onClick = {
-                        if (!permGate.ensurePermsOrRequest()) return@Button
-                        viewModel.onEvent(UiEvent.PeripheralTxStartClicked)
-                    }
+                    onClick = { runWithBlePerms(UiEvent.PeripheralTxStartClicked) }
                 ) { Text("Peripheral TX start") }
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
                     modifier = Modifier.weight(1f),
-                    onClick = {
-                        if (!permGate.ensurePermsOrRequest()) return@Button
-                        viewModel.onEvent(UiEvent.PeripheralTxStopClicked)
-                    }
+                    onClick = { runWithBlePerms(UiEvent.PeripheralTxStopClicked) }
                 ) { Text("Peripheral TX stop") }
 
                 OutlinedButton(

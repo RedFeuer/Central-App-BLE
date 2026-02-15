@@ -5,6 +5,7 @@ import android.os.Build
 
 class BlePermissionGate(
     private val request: (Array<String>) -> Unit,
+    private val isGranted: (String) -> Boolean,
 ) {
     private val blePerms31 = arrayOf(
         Manifest.permission.BLUETOOTH_SCAN,
@@ -13,6 +14,11 @@ class BlePermissionGate(
 
     fun ensurePermsOrRequest(): Boolean {
         if (Build.VERSION.SDK_INT < 31) return true
+
+        /* проверка, что права выданы */
+        val ok = blePerms31.all(isGranted)
+        if (ok) return true
+
         request(blePerms31)
         return false
     }
