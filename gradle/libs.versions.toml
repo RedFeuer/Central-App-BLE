@@ -6,7 +6,7 @@ junitVersion = "1.3.0"
 espressoCore = "3.7.0"
 lifecycleRuntimeKtx = "2.10.0"
 activityCompose = "1.12.3"
-kotlin = "2.0.21"
+kotlin = "2.3.10"
 composeBom = "2024.09.00"
 appcompat = "+"
 material = "+"
@@ -16,7 +16,7 @@ bluetooth = "1.0.0-alpha02"
 
 # Hilt runtime + compiler for KSP
 hilt = "2.59.1"
-ksp = "2.0.21-1.0.28"
+ksp = "2.3.5"
 foundationLayout = "1.10.2"
 
 [libraries]
