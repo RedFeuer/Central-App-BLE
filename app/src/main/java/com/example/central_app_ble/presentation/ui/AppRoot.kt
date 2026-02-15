@@ -41,6 +41,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppRoot() {
+    /* для проверки permission'ов */
     val appContext = LocalContext.current
 
     /* действие пользователя */
@@ -53,38 +54,43 @@ fun AppRoot() {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
+    /* проверяет, все ли выданы разрешения, и продолжает отложенное событие */
     val permsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         viewModel.log("perm result: $result")
 
-        val allGranted = result.values.all { it }
+        val allGranted = result.values.all { it } // все permissions
         if (allGranted) {
-            pendingEvent?.let { e ->
-                pendingEvent = null
-                viewModel.onEvent(e)
+            /* если выданы все permissions и было отложенное событие (pendingEvent) */
+            pendingEvent?.let { event ->
+                pendingEvent = null // очистка, чтобы не выполнилось повторно
+                viewModel.onEvent(event) // запуск отложенного события
             }
         }
     }
 
     val permGate = remember {
         BlePermissionGate(
-            request = { permsLauncher.launch(it) },
-            isGranted = { permission ->
+            request = { permsLauncher.launch(it) }, // запуск запроса разрешений
+            isGranted = { permission -> // проверка конктретного разрешения
                 ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
             }
         )
     }
 
-    /* обработчик кнопки */
+    /* обработчик кнопки - обертка над onClick() */
     fun runWithBlePerms(event: UiEvent) {
         if (permGate.ensurePermsOrRequest()) {
+            /* если есть permission, то выполнить */
             viewModel.onEvent(event)
         } else {
+            /* если permission нет, то отложить событие */
             pendingEvent = event
         }
     }
 
+    /* сбор логов из viewModel */
     LaunchedEffect(Unit) {
         viewModel.logs.collect { line ->
             logs.add(line)
