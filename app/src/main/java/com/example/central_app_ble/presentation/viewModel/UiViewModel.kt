@@ -81,11 +81,13 @@ class UiViewModel @Inject constructor(
     private fun connect() = viewModelScope.launch {
         val device = _state.value.selected
         if (device == null) {
+            /* неудачный скан или попытка коннекта без скана */
             _logs.tryEmit("Сначала Scan")
             return@launch
         }
 
         try {
+            /* подключение Central к Peripheral */
             connectUseCase(device)
             _logs.tryEmit("CONNECTED + INIT OK")
         } catch (e: Exception) {
@@ -116,6 +118,7 @@ class UiViewModel @Inject constructor(
             return
         }
 
+        /* обновляем состояние на отправку данных Central -> Peripheral */
         _state.value = _state.value.copy(isCentralStreaming = true)
 
         streamJob = viewModelScope.launch {
@@ -125,6 +128,7 @@ class UiViewModel @Inject constructor(
             } catch (e: Exception) {
                 _logs.tryEmit("stream failed: ${e.message}")
             } finally {
+                /* обновляем состояние на прерывание отрпавки данных */
                 _state.value = _state.value.copy(isCentralStreaming = false)
             }
         }

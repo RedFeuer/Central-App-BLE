@@ -40,6 +40,7 @@ class BleRepositoryImpl @Inject constructor (
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     override val connectionState: StateFlow<ConnectionState> = _connectionState
 
+    /* Central-устройство (Клиент) */
     private var gattClient: AndroidGattClient? = null
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
@@ -61,8 +62,9 @@ class BleRepositoryImpl @Inject constructor (
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override suspend fun connect(device: BleDevice) {
-        disconnect()
+        disconnect() // закрываем GATT и меняем состояние на ожидание
 
+        /* связывание */
         _connectionState.value = ConnectionState.Bonding
         bonding.ensureBonded(device.address)
         bus.log("BONDED OK")
@@ -83,6 +85,7 @@ class BleRepositoryImpl @Inject constructor (
         }
     }
 
+    /* закрываем старый GATT и меняем состояние на ожидание */
     override fun disconnect() {
         runCatching { gattClient?.close() }
         gattClient = null
@@ -97,6 +100,7 @@ class BleRepositoryImpl @Inject constructor (
         client.writeCmd(CommandCodec.encode(cmd))
     }
 
+    /* Central -> Peripheral */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     override suspend fun writeCentralData(bytes: ByteArray) {
         val client = gattClient ?: error("not connected")

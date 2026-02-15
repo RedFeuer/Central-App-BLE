@@ -33,20 +33,31 @@ class AndroidGattClient @AssistedInject constructor(
     private val device: BluetoothDevice =
         BluetoothAdapter.getDefaultAdapter().getRemoteDevice(address)
 
+    /* клиентская сессия со стороны Central
+    * сообщение на уровне Central (клиент) <-> Peripheral (сервер)*/
     private var gatt: BluetoothGatt? = null
 
+    /* TX - Transmit
+    * RX - Receive */
+
+    /* куда Central пишет команды */
     private var cmdRx: BluetoothGattCharacteristic? = null
+    /* откуда Peripheral шлет события через notify */
     private var cmdTx: BluetoothGattCharacteristic? = null
+    /* куда Central пишет потоко данных */
     private var dataRx: BluetoothGattCharacteristic? = null
+    /* откуда Peripheral шлет поток данных через notify */
     private var dataTx: BluetoothGattCharacteristic? = null
 
+    /* promise'ы */
     private val connected = CompletableDeferred<Unit>()
     private val servicesDiscovered = CompletableDeferred<Unit>()
     private val mtuChanged = CompletableDeferred<Int>()
     private var descWriteWaiter: CompletableDeferred<Pair<UUID, Int>>? = null
 
-    private val cb = object : BluetoothGattCallback() {
+    private val callback = object : BluetoothGattCallback() {
 
+        /* callback для connected */
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             bus.log("connState status=$status newState=$newState")
             if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
@@ -54,11 +65,13 @@ class AndroidGattClient @AssistedInject constructor(
             }
         }
 
+        /* callback для servicesDiscovered */
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             bus.log("servicesDiscovered status=$status")
             if (status == BluetoothGatt.GATT_SUCCESS) servicesDiscovered.complete(Unit)
         }
 
+        /* callback для mtuChanged */
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
             bus.log("mtuChanged mtu=$mtu status=$status")
             if (status == BluetoothGatt.GATT_SUCCESS) mtuChanged.complete(mtu)
@@ -70,17 +83,17 @@ class AndroidGattClient @AssistedInject constructor(
             descWriteWaiter = null
         }
 
-        override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic) {
+        override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             @Suppress("DEPRECATION")
-            handleNotify(ch, ch.value ?: byteArrayOf())
+            handleNotify(characteristic, characteristic.value ?: byteArrayOf())
         }
 
-        override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray) {
-            handleNotify(ch, value)
+        override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+            handleNotify(characteristic, value)
         }
 
-        private fun handleNotify(ch: BluetoothGattCharacteristic, value: ByteArray) {
-            when (ch.uuid) {
+        private fun handleNotify(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+            when (characteristic.uuid) {
                 BleUuids.CMD_TX -> {
                     val cmd = CommandCodec.decode(value)
                     bus.log("RX CMD_TX: $cmd")
@@ -97,27 +110,27 @@ class AndroidGattClient @AssistedInject constructor(
     @SuppressLint("SupportAnnotationUsage")
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     suspend fun connectAndInit() {
-        checkConnectPermission()
+        checkConnectPermission() // проверка permission'ов
 
-        val g = if (Build.VERSION.SDK_INT >= 23)
-            device.connectGatt(context, false, cb, BluetoothDevice.TRANSPORT_LE)
-        else
-            @Suppress("DEPRECATION") device.connectGatt(context, false, cb)
-
+        /* создание GATT соединения
+        * события подключения придут в callback в другом потоке (асинхронно) */
+        val g = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
         gatt = g
 
+        /* ждем возврата connected.complete(Unit) или истечения времени из onConnectionStateChange() */
         withTimeout(10_000) { connected.await() }
 
+        /* ждем возврата servicesDiscovered.complete(Unit) или истечения времени из onServicesDiscovered
+        * составление таблицы атрибутов на Peripheral (Gatt Server) */
         if (!g.discoverServices()) error("discoverServices() false")
         withTimeout(10_000) { servicesDiscovered.await() }
 
-        bind()
+        bind() // получаем GATT характеристики Peripheral устройства
 
-        if (Build.VERSION.SDK_INT >= 21) {
-            g.requestMtu(247)
-            val mtu = withTimeout(10_000) { mtuChanged.await() }
-            require(mtu >= 163) { "MTU=$mtu слишком мал для 160 байт" }
-        }
+        /* ждем возврата mtuChanged.complete(mtu) или истечения времени для onMtuChanged() */
+        g.requestMtu(247) // 163 байта точно влезет
+        val mtu = withTimeout(10_000) { mtuChanged.await() }
+        require(mtu >= 163) { "MTU=$mtu слишком мал для 160 байт" }
 
         enableNotify(cmdTx!!)
         enableNotify(dataTx!!)
@@ -135,35 +148,38 @@ class AndroidGattClient @AssistedInject constructor(
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun writeCmd(value: ByteArray) {
-        val ch = cmdRx ?: error("CMD_RX missing")
-        write(ch, value, withResponse = true)
+        val characteristic = cmdRx ?: error("CMD_RX missing")
+        write(characteristic, value, withResponse = true)
     }
 
+    /* Central -> Peripheral */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun writeDataNoResp(value: ByteArray) {
-        val ch = dataRx ?: error("DATA_RX missing")
-        write(ch, value, withResponse = false)
+        val characteristic = dataRx ?: error("DATA_RX missing")
+        write(characteristic, value, withResponse = false)
     }
 
     private fun bind() {
+        /* ищем сервис, который Central получил от Peripheral после discoverService() */
         val g = gatt ?: error("no gatt")
-        val svc = g.getService(BleUuids.SERVICE) ?: error("service not found")
+        val service = g.getService(BleUuids.SERVICE) ?: error("service not found")
 
-        cmdRx = svc.getCharacteristic(BleUuids.CMD_RX) ?: error("CMD_RX missing")
-        cmdTx = svc.getCharacteristic(BleUuids.CMD_TX) ?: error("CMD_TX missing")
-        dataRx = svc.getCharacteristic(BleUuids.DATA_RX) ?: error("DATA_RX missing")
-        dataTx = svc.getCharacteristic(BleUuids.DATA_TX) ?: error("DATA_TX missing")
+        /* получаем GATT характеристики Peripheral устройства */
+        cmdRx = service.getCharacteristic(BleUuids.CMD_RX) ?: error("CMD_RX missing")
+        cmdTx = service.getCharacteristic(BleUuids.CMD_TX) ?: error("CMD_TX missing")
+        dataRx = service.getCharacteristic(BleUuids.DATA_RX) ?: error("DATA_RX missing")
+        dataTx = service.getCharacteristic(BleUuids.DATA_TX) ?: error("DATA_TX missing")
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private suspend fun enableNotify(ch: BluetoothGattCharacteristic) {
+    private suspend fun enableNotify(characteristic: BluetoothGattCharacteristic) {
         val g = gatt ?: error("no gatt")
 
-        require(g.setCharacteristicNotification(ch, true)) {
-            "setCharacteristicNotification failed uuid=${ch.uuid}"
+        require(g.setCharacteristicNotification(characteristic, true)) {
+            "setCharacteristicNotification failed uuid=${characteristic.uuid}" // lazyMessage из документации
         }
 
-        val cccd = ch.getDescriptor(BleUuids.CCCD) ?: error("CCCD missing uuid=${ch.uuid}")
+        val cccd = characteristic.getDescriptor(BleUuids.CCCD) ?: error("CCCD missing uuid=${characteristic.uuid}")
         val value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
 
         val waiter = CompletableDeferred<Pair<UUID, Int>>()
@@ -178,31 +194,33 @@ class AndroidGattClient @AssistedInject constructor(
             g.writeDescriptor(cccd)
         }
 
-        require(started) { "writeDescriptor start failed uuid=${ch.uuid}" }
+        require(started) { "writeDescriptor start failed uuid=${characteristic.uuid}" }
 
+        /* ждем возврата descWriteWaiter?.complete или истчения времени для onDescriptorWrite() */
         val (uuid, status) = withTimeout(10_000) { waiter.await() }
-        require(uuid == ch.uuid) { "Descriptor write mismatch: expected=${ch.uuid} got=$uuid" }
+        require(uuid == characteristic.uuid) { "Descriptor write mismatch: expected=${characteristic.uuid} got=$uuid" }
         require(status == BluetoothGatt.GATT_SUCCESS) { "Descriptor write status=$status uuid=$uuid" }
     }
 
+    /* используется writeCmd и write(Central -> Peripheral) */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private fun write(ch: BluetoothGattCharacteristic, value: ByteArray, withResponse: Boolean) {
+    private fun write(characteristic: BluetoothGattCharacteristic, value: ByteArray, withResponse: Boolean) {
         val g = gatt ?: error("no gatt")
 
-        ch.writeType = if (withResponse)
+        characteristic.writeType = if (withResponse)
             BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         else
             BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
 
         val started: Boolean = if (Build.VERSION.SDK_INT >= 33) {
-            g.writeCharacteristic(ch, value, ch.writeType) == BluetoothStatusCodes.SUCCESS
+            g.writeCharacteristic(characteristic, value, characteristic.writeType) == BluetoothStatusCodes.SUCCESS
         } else {
             @Suppress("DEPRECATION")
-            ch.value = value
+            characteristic.value = value
             @Suppress("DEPRECATION")
-            g.writeCharacteristic(ch)
+            g.writeCharacteristic(characteristic)
         }
-        require(started) { "writeCharacteristic start failed uuid=${ch.uuid}" }
+        require(started) { "writeCharacteristic start failed uuid=${characteristic.uuid}" }
     }
 
     private fun checkConnectPermission() {

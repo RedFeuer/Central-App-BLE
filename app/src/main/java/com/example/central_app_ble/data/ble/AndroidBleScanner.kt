@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
-class AndroidBleScanner () {
+class AndroidBleScanner @Inject constructor() {
     private val adapter: BluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
     private val scanner: BluetoothLeScanner by lazy { adapter.bluetoothLeScanner }
 
