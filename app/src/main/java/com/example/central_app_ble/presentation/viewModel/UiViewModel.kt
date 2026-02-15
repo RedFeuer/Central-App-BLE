@@ -2,10 +2,11 @@ package com.example.central_app_ble.presentation.viewModel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.central_app_ble.data.repositoryImpl.BleRepositoryImpl
 import com.example.central_app_ble.domain.domainModel.ConnectionState
 import com.example.central_app_ble.domain.useCase.CentralStreamUseCase
 import com.example.central_app_ble.domain.useCase.ConnectUseCase
+import com.example.central_app_ble.domain.useCase.DisconnectUseCase
+import com.example.central_app_ble.domain.useCase.ObserveConnectionStateUseCase
 import com.example.central_app_ble.domain.useCase.ObserveLogsUseCase
 import com.example.central_app_ble.domain.useCase.PeripheralTxControlUseCase
 import com.example.central_app_ble.domain.useCase.PingUseCase
@@ -28,7 +29,8 @@ class UiViewModel @Inject constructor(
     private val centralStreamUseCase: CentralStreamUseCase,
     private val peripheralTxControlUseCase: PeripheralTxControlUseCase,
     private val observeLogsUseCase: ObserveLogsUseCase,
-    private val repoImpl: BleRepositoryImpl,
+    private val observeConnectionStateUseCase: ObserveConnectionStateUseCase,
+    private val disconnectUseCase: DisconnectUseCase,
 ) : ViewModel() {
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -43,7 +45,7 @@ class UiViewModel @Inject constructor(
             observeLogsUseCase().collect { _logs.tryEmit(it) }
         }
         viewModelScope.launch {
-            repoImpl.connectionState.collect { connectionState ->
+            observeConnectionStateUseCase().collect { connectionState ->
                 _state.value = _state.value.copy(connectionState = connectionState)
             }
         }
@@ -159,7 +161,7 @@ class UiViewModel @Inject constructor(
 
     fun onClearedByUi() {
         stopCentralStream()
-        repoImpl.disconnect()
+        disconnectUseCase()
     }
 
     override fun onCleared() {
