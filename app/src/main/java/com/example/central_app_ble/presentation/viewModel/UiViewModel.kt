@@ -13,6 +13,7 @@ import com.example.central_app_ble.domain.useCase.PingUseCase
 import com.example.central_app_ble.domain.useCase.ScanUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import jakarta.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -125,6 +126,9 @@ class UiViewModel @Inject constructor(
             try {
                 val sent = centralStreamUseCase(durationMs = 10_000)
                 _logs.tryEmit("stream done. blocksSent=$sent")
+            } catch (e: CancellationException) {
+                /* отдельно обрабатываем отмену корутины, чтобы не засорять логи */
+                throw e
             } catch (e: Exception) {
                 _logs.tryEmit("stream failed: ${e.message}")
             } finally {
