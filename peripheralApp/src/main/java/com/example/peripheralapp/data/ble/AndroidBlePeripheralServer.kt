@@ -16,11 +16,10 @@ import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
 import android.bluetooth.le.BluetoothLeAdvertiser
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelUuid
-import android.util.Log
 import androidx.annotation.RequiresPermission
+import com.example.peripheralapp.domain.domainModel.PeripheralState
 import com.example.shared.BleUuids
 import com.example.shared.Command
 import com.example.shared.CommandCodec
@@ -30,19 +29,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
-class BlePeripheralServer(
+class AndroidBlePeripheralServer(
     private val context: Context,
-    private val deviceName: String = "BLE-Peripheral",
-    private val logger: (String) -> Unit = { android.util.Log.i("BlePeripheral", it) },
+    private val bus: PeripheralEventBus,
 ) {
-    private val logTag = "BlePeripheral"
-
-    private fun log(s: String) = logger("$logTag $s")
-
     private val btManager = context.getSystemService(BluetoothManager::class.java)
     private val adapter: BluetoothAdapter = btManager.adapter
 
@@ -51,6 +47,7 @@ class BlePeripheralServer(
 
     private val subscribedCmd = ConcurrentHashMap.newKeySet<BluetoothDevice>()
     private val subscribedData = ConcurrentHashMap.newKeySet<BluetoothDevice>()
+    private val connected = ConcurrentHashMap.newKeySet<BluetoothDevice>()
 
     private lateinit var cmdTxChar: BluetoothGattCharacteristic
     private lateinit var dataTxChar: BluetoothGattCharacteristic
@@ -59,90 +56,58 @@ class BlePeripheralServer(
     private var txJob: Job? = null
     private var txSeq = 0
 
-    private fun startTxStream() {
-        if (txJob?.isActive == true) return
+    private val _state = MutableStateFlow(PeripheralState())
+    val state: StateFlow<PeripheralState> = _state
 
-        txJob = txScope.launch {
-            var tick = 0
-            while (isActive) {
-                val buf = ByteArray(Protocol.STREAM_BLOCK_SIZE)
+    fun isPeripheralSupported(): Boolean = adapter.bluetoothLeAdvertiser != null
 
-                // первые 4 байта - счётчик (удобно для отладки потерь/порядка)
-                val s = txSeq++
-                buf[0] = (s and 0xFF).toByte()
-                buf[1] = ((s shr 8) and 0xFF).toByte()
-                buf[2] = ((s shr 16) and 0xFF).toByte()
-                buf[3] = ((s shr 24) and 0xFF).toByte()
-
-                if (tick++ % 16 == 0) { // примерно раз в 1секунду = 16*60ms
-                    Log.i(logTag, "TX tick seq=$s subscribedData=${subscribedData.size}")
-                }
-
-                // шлём всем, кто подписался на DATA_TX
-                for (dev in subscribedData) {
-                    notifyData(dev, buf)
-                }
-
-                delay(Protocol.STREAM_PERIOD_MS)
-            }
+    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE])
+    fun start(deviceName: String = "BLE-Peripheral") {
+        if (!isPeripheralSupported()) {
+            _state.value = _state.value.copy(isSupported = false, lastError = "Peripheral/Advertising не поддерживается")
+            bus.log("Peripheral/Advertising НЕ поддерживается")
+            return
         }
 
-        log("TX stream started; subscribedData=${subscribedData.size}")
-    }
-
-    private fun stopTxStream() {
-        txJob?.cancel()
-        txJob = null
-        Log.i(logTag, "TX stream stopped")
-    }
-
-
-    fun isPeripheralSupported(): Boolean {
-        val adv = adapter.bluetoothLeAdvertiser
-//        return adv != null && adapter.isMultipleAdvertisementSupported
-        return adv != null
-    }
-
-
-    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    fun start() {
         require(adapter.isEnabled) { "Bluetooth выключен" }
-        adapter.name = deviceName
+
+        // менять имя — не обязательно; иногда может дать SecurityException
+        runCatching { adapter.name = deviceName }.onFailure {
+            bus.log("setName failed: ${it.message}")
+        }
 
         startGattServer()
         startAdvertising()
 
-        Log.i("BlePeripheral_START", "BT enabled=${adapter.isEnabled}, adv=${adapter.bluetoothLeAdvertiser}")
+        _state.value = _state.value.copy(isSupported = true, isRunning = true, lastError = null)
+        bus.log("Peripheral запущен: advertising + GATT server")
+        publishCounters()
     }
 
-    private fun hasPermission(permission: String): Boolean =
-        Build.VERSION.SDK_INT < 31 ||
-                context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
-
     fun stop() {
-        txJob?.cancel()
-        txJob = null
+        stopTxStream()
 
-        try {
-            if (hasPermission(Manifest.permission.BLUETOOTH_ADVERTISE)) {
-                advertiser?.stopAdvertising(advCallback)
-            }
-        } catch (_: SecurityException) {
-        } finally {
-            advertiser = null
-        }
+        runCatching {
+            advertiser?.stopAdvertising(advCallback)
+        }.onFailure { bus.log("stopAdvertising failed: ${it.message}") }
+        advertiser = null
 
-        try {
-            if (hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-                gattServer?.close()
-            }
-        } catch (_: SecurityException) {
-        } finally {
-            gattServer = null
-        }
+        runCatching {
+            gattServer?.close()
+        }.onFailure { bus.log("gattServer.close failed: ${it.message}") }
+        gattServer = null
 
         subscribedCmd.clear()
         subscribedData.clear()
+        connected.clear()
+
+        _state.value = _state.value.copy(isRunning = false)
+        bus.log("Peripheral stopped")
+        publishCounters()
+    }
+
+    fun clearError() {
+        _state.value = _state.value.copy(lastError = null)
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -150,7 +115,8 @@ class BlePeripheralServer(
         gattServer = btManager.openGattServer(context, gattCallback)
         val server = gattServer ?: error("openGattServer() вернул null")
 
-        val service = BluetoothGattService(BleUuids.SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        val service =
+            BluetoothGattService(BleUuids.SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY)
 
         val cmdRx = BluetoothGattCharacteristic(
             BleUuids.CMD_RX,
@@ -196,18 +162,13 @@ class BlePeripheralServer(
         service.addCharacteristic(dataTxChar)
 
         val ok = server.addService(service)
-        Log.i(logTag, "addService: $ok")
+        bus.log("addService: $ok")
     }
 
-    private fun cccdDescriptor(): BluetoothGattDescriptor =
-        BluetoothGattDescriptor(
-            BleUuids.CCCD,
-            BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE
-        )
-
+    @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     private fun startAdvertising() {
         advertiser = adapter.bluetoothLeAdvertiser
-        val adv = advertiser ?: error("Advertising не поддерживается на этом устройстве")
+        val adv = advertiser ?: error("Advertising не поддерживается")
 
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
@@ -229,26 +190,31 @@ class BlePeripheralServer(
 
     private val advCallback = object : AdvertiseCallback() {
         override fun onStartFailure(errorCode: Int) {
-            Log.e(logTag, "Advertising failed: $errorCode")
+            bus.log("Advertising failed: $errorCode")
+            _state.value = _state.value.copy(lastError = "Advertising failed: $errorCode")
         }
 
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
-            Log.i("BlePeripheral", "Advertising started")
+            bus.log("Advertising started")
         }
     }
 
     private val gattCallback = object : BluetoothGattServerCallback() {
 
         override fun onServiceAdded(status: Int, service: BluetoothGattService) {
-            Log.i(logTag, "Service added status=$status uuid=${service.uuid}")
+            bus.log("Service added status=$status uuid=${service.uuid}")
         }
 
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            Log.i(logTag, "Conn state: ${device.address}, status=$status, newState=$newState")
-            if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+            bus.log("Conn state: ${device.address}, status=$status, newState=$newState")
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                connected.add(device)
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                connected.remove(device)
                 subscribedCmd.remove(device)
                 subscribedData.remove(device)
             }
+            publishCounters()
         }
 
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -268,13 +234,13 @@ class BlePeripheralServer(
                 BleUuids.CMD_TX -> if (enabled) subscribedCmd.add(device) else subscribedCmd.remove(device)
                 BleUuids.DATA_TX -> if (enabled) subscribedData.add(device) else subscribedData.remove(device)
             }
-            Log.i(logTag, "CCCD write for $charUuid enabled=$enabled subCmd=${subscribedCmd.size} subData=${subscribedData.size}")
+
+            bus.log("CCCD write for $charUuid enabled=$enabled subCmd=${subscribedCmd.size} subData=${subscribedData.size}")
+            publishCounters()
 
             if (responseNeeded) {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
-
-            Log.i(logTag, "CCCD write for $charUuid enabled=$enabled")
         }
 
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -290,25 +256,24 @@ class BlePeripheralServer(
             when (characteristic.uuid) {
 
                 BleUuids.CMD_RX -> {
-                    val hex = value.joinToString(" ") { "%02X".format(it) }
                     val cmd = CommandCodec.decode(value)
-                    Log.i(logTag, "CMD_RX raw=[$hex] decoded=$cmd")
+                    bus.log("CMD_RX decoded=$cmd rawSize=${value.size}")
 
                     when (cmd) {
                         Command.Ping -> notifyCmd(device, Command.Pong)
                         Command.StartStream -> startTxStream()
                         Command.StopStream -> stopTxStream()
-                        null -> Log.w(logTag, "CMD_RX unknown bytes=[$hex]")
+                        null -> bus.log("CMD_RX unknown bytes size=${value.size}")
                         else -> {}
                     }
                 }
 
                 BleUuids.DATA_RX -> {
-                    Log.i(logTag, "DATA_RX size=${value.size}")
+                    bus.log("DATA_RX size=${value.size}")
                     if (value.size == Protocol.STREAM_BLOCK_SIZE) {
-                        notifyData(device, value) // эхо
+                        notifyData(device, value) // echo
                     } else {
-                        Log.w(logTag, "DATA_RX wrong size=${value.size}")
+                        bus.log("DATA_RX wrong size=${value.size}")
                     }
                 }
             }
@@ -319,11 +284,53 @@ class BlePeripheralServer(
         }
     }
 
+    private fun publishCounters() {
+        _state.value = _state.value.copy(
+            connectedCount = connected.size,
+            subscribedCmd = subscribedCmd.size,
+            subscribedData = subscribedData.size,
+        )
+    }
+
+    private fun startTxStream() {
+        if (txJob?.isActive == true) return
+
+        txJob = txScope.launch {
+            var tick = 0
+            while (isActive) {
+                val buf = ByteArray(Protocol.STREAM_BLOCK_SIZE)
+
+                val s = txSeq++
+                buf[0] = (s and 0xFF).toByte()
+                buf[1] = ((s shr 8) and 0xFF).toByte()
+                buf[2] = ((s shr 16) and 0xFF).toByte()
+                buf[3] = ((s shr 24) and 0xFF).toByte()
+
+                if (tick++ % 16 == 0) {
+                    bus.log("TX tick seq=$s subscribedData=${subscribedData.size}")
+                }
+
+                for (dev in subscribedData) {
+                    notifyData(dev, buf)
+                }
+
+                delay(Protocol.STREAM_PERIOD_MS)
+            }
+        }
+
+        bus.log("TX stream started; subscribedData=${subscribedData.size}")
+    }
+
+    private fun stopTxStream() {
+        txJob?.cancel()
+        txJob = null
+        bus.log("TX stream stopped")
+    }
+
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun notifyCmd(device: BluetoothDevice, cmd: Command) {
         if (!subscribedCmd.contains(device)) return
-        val payload = CommandCodec.encode(cmd)
-        notifyCharacteristic(device, cmdTxChar, payload)
+        notifyCharacteristic(device, cmdTxChar, CommandCodec.encode(cmd))
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
@@ -335,6 +342,7 @@ class BlePeripheralServer(
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun notifyCharacteristic(device: BluetoothDevice, ch: BluetoothGattCharacteristic, value: ByteArray) {
         val server = gattServer ?: return
+
         if (Build.VERSION.SDK_INT >= 33) {
             server.notifyCharacteristicChanged(device, ch, false, value)
         } else {
