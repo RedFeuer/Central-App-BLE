@@ -1,6 +1,10 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+
+    // Hilt runtime + compiler for KSP
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt.android)
 }
 
 android {
@@ -51,6 +55,15 @@ dependencies {
 
     /* модуль shared */
     implementation(project(":shared"))
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.bluetooth)
+
+    /* Hilt runtime + compiler for KSP */
+    implementation(libs.hilt.android)
+    implementation("androidx.hilt:hilt-navigation-compose:1.3.0")
+    implementation(libs.androidx.compose.foundation.layout)
+    ksp(libs.hilt.compiler)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
