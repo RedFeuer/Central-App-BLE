@@ -132,7 +132,8 @@ class UiViewModel @Inject constructor(
             } catch (e: Exception) {
                 _logs.tryEmit("stream failed: ${e.message}")
             } finally {
-                /* обновляем состояние на прерывание отрпавки данных */
+                /* обновляем состояние на прерывание отрпавки данных
+                * после успешной передачи в течение 10 секунд*/
                 _state.value = _state.value.copy(isCentralStreaming = false)
             }
         }
