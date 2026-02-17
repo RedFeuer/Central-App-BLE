@@ -8,7 +8,7 @@ import javax.inject.Singleton
 
 /* singleton to maintain state correct during sessions */
 @Singleton
-class PeripheralEventBus @Inject constructor () {
+class PeripheralLogBus @Inject constructor () {
     private val _logs = MutableSharedFlow<String>(extraBufferCapacity = 512)
     val logs = _logs.asSharedFlow()
 

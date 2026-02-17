@@ -2,8 +2,8 @@ package com.example.peripheralapp.domain.useCase
 
 import com.example.peripheralapp.domain.repository.PeripheralRepository
 
-class StopPeripheralUseCase(
+class StopServerPeripheralUseCase(
     private val repo: PeripheralRepository,
 ) {
-    operator fun invoke() = repo.stop()
+    operator fun invoke() = repo.stopServer()
 }

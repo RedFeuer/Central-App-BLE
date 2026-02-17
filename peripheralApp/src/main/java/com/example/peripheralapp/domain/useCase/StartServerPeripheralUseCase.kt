@@ -2,8 +2,8 @@ package com.example.peripheralapp.domain.useCase
 
 import com.example.peripheralapp.domain.repository.PeripheralRepository
 
-class StartPeripheralUseCase(
+class StartServerPeripheralUseCase(
     private val repo: PeripheralRepository,
 ) {
-    operator fun invoke() = repo.start()
+    operator fun invoke() = repo.startServer()
 }
