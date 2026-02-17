@@ -132,8 +132,9 @@ class AndroidGattClient @AssistedInject constructor(
         val mtu = withTimeout(10_000) { mtuChanged.await() }
         require(mtu >= 163) { "MTU=$mtu слишком мал для 160 байт" }
 
-        enableNotify(cmdTx!!)
-        enableNotify(dataTx!!)
+        /* подписка на уведомления от Peripheral*/
+        enableNotify(cmdTx!!) // чтобы Central получал команды Peripheral -> Central (Pong)
+        enableNotify(dataTx!!) // чтобы Cental получал данные  Peripheral -> Central
 
         bus.log("notify enabled CMD_TX")
         bus.log("notify enabled DATA_TX")
