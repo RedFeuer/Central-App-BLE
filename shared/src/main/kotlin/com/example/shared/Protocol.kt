@@ -9,8 +9,8 @@ object Protocol {
 sealed interface Command {
     data object Ping : Command
     data object Pong : Command
-    data object StartStream : Command
-    data object StopStream : Command
+    data object StartTransfer : Command
+    data object StopTransfer : Command
 }
 
 object CommandCodec {
@@ -23,16 +23,16 @@ object CommandCodec {
         when (cmd) {
             Command.Ping -> PING
             Command.Pong -> PONG
-            Command.StartStream -> START
-            Command.StopStream -> STOP
+            Command.StartTransfer -> START
+            Command.StopTransfer -> STOP
         }
     )
 
     fun decode(bytes: ByteArray): Command? = when (bytes.firstOrNull()) {
         PING -> Command.Ping
         PONG -> Command.Pong
-        START -> Command.StartStream
-        STOP -> Command.StopStream
+        START -> Command.StartTransfer
+        STOP -> Command.StopTransfer
         else -> null
     }
 }

@@ -39,7 +39,7 @@ import javax.inject.Inject
 
 class AndroidBlePeripheralServer @Inject constructor (
     @ApplicationContext private val context: Context,
-    private val bus: PeripheralEventBus,
+    private val bus: PeripheralLogBus,
 ) {
     private val btManager = context.getSystemService(BluetoothManager::class.java)
     private val adapter: BluetoothAdapter = btManager.adapter
@@ -86,7 +86,7 @@ class AndroidBlePeripheralServer @Inject constructor (
     }
 
     fun stop() {
-        stopTxStream()
+        stopTransfer()
 
         runCatching {
             advertiser?.stopAdvertising(advCallback)
@@ -105,6 +105,42 @@ class AndroidBlePeripheralServer @Inject constructor (
         _state.value = _state.value.copy(isRunning = false)
         bus.log(message = "Peripheral stopped")
         publishCounters()
+    }
+
+    /* Peripheral -> Central */
+    fun startTransfer() {
+        if (txJob?.isActive == true) return
+
+        txJob = txScope.launch {
+            var tick = 0
+            while (isActive) {
+                val buf = ByteArray(Protocol.STREAM_BLOCK_SIZE)
+
+                val s = txSeq++
+                buf[0] = (s and 0xFF).toByte()
+                buf[1] = ((s shr 8) and 0xFF).toByte()
+                buf[2] = ((s shr 16) and 0xFF).toByte()
+                buf[3] = ((s shr 24) and 0xFF).toByte()
+
+                if (tick++ % 16 == 0) {
+                    bus.log(message = "TX tick seq=$s subscribedData=${subscribedData.size}")
+                }
+
+                for (dev in subscribedData) {
+                    notifyData(dev, buf)
+                }
+
+                delay(Protocol.STREAM_PERIOD_MS)
+            }
+        }
+
+        bus.log(message = "TX stream started; subscribedData=${subscribedData.size}")
+    }
+
+    fun stopTransfer() {
+        txJob?.cancel()
+        txJob = null
+        bus.log(message = "TX stream stopped")
     }
 
     fun clearError() {
@@ -262,8 +298,6 @@ class AndroidBlePeripheralServer @Inject constructor (
 
                     when (cmd) {
                         Command.Ping -> notifyCmd(device, Command.Pong)
-                        Command.StartStream -> startTxStream()
-                        Command.StopStream -> stopTxStream()
                         null -> bus.log(message = "CMD_RX unknown bytes size=${value.size}")
                         else -> {}
                     }
@@ -272,7 +306,7 @@ class AndroidBlePeripheralServer @Inject constructor (
                 BleUuids.DATA_RX -> {
                     bus.log(message = "DATA_RX size=${value.size}")
                     if (value.size == Protocol.STREAM_BLOCK_SIZE) {
-                        notifyData(device, value) // echo
+                        notifyData(device, value)
                     } else {
                         bus.log(message = "DATA_RX wrong size=${value.size}")
                     }
@@ -291,41 +325,6 @@ class AndroidBlePeripheralServer @Inject constructor (
             subscribedCmd = subscribedCmd.size,
             subscribedData = subscribedData.size,
         )
-    }
-
-    private fun startTxStream() {
-        if (txJob?.isActive == true) return
-
-        txJob = txScope.launch {
-            var tick = 0
-            while (isActive) {
-                val buf = ByteArray(Protocol.STREAM_BLOCK_SIZE)
-
-                val s = txSeq++
-                buf[0] = (s and 0xFF).toByte()
-                buf[1] = ((s shr 8) and 0xFF).toByte()
-                buf[2] = ((s shr 16) and 0xFF).toByte()
-                buf[3] = ((s shr 24) and 0xFF).toByte()
-
-                if (tick++ % 16 == 0) {
-                    bus.log(message = "TX tick seq=$s subscribedData=${subscribedData.size}")
-                }
-
-                for (dev in subscribedData) {
-                    notifyData(dev, buf)
-                }
-
-                delay(Protocol.STREAM_PERIOD_MS)
-            }
-        }
-
-        bus.log(message = "TX stream started; subscribedData=${subscribedData.size}")
-    }
-
-    private fun stopTxStream() {
-        txJob?.cancel()
-        txJob = null
-        bus.log(message = "TX stream stopped")
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
