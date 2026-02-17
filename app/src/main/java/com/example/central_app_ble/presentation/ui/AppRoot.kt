@@ -71,10 +71,8 @@ fun AppRoot() {
         onScan = { runWithBlePermissions(UiEvent.ScanClicked) },
         onConnect = { runWithBlePermissions(UiEvent.ConnectClicked) },
         onPing = { runWithBlePermissions(UiEvent.PingClicked) },
-        onCentralStreamStart = { runWithBlePermissions(UiEvent.CentralStreamStartClicked) },
-        onCentralStreamStop = { runWithBlePermissions(UiEvent.CentralStreamStopClicked) },
-        onPeripheralTxStart = { runWithBlePermissions(UiEvent.PeripheralTxStartClicked) },
-        onPeripheralTxStop = { runWithBlePermissions(UiEvent.PeripheralTxStopClicked) },
+        onTransferStart = { runWithBlePermissions(UiEvent.CentralStreamStartClicked) },
+        onTransferStop = { runWithBlePermissions(UiEvent.CentralStreamStopClicked) },
     )
 }
 
@@ -88,10 +86,8 @@ private fun AppScreen(
     onScan: () -> Unit,
     onConnect: () -> Unit,
     onPing: () -> Unit,
-    onCentralStreamStart: () -> Unit,
-    onCentralStreamStop: () -> Unit,
-    onPeripheralTxStart: () -> Unit,
-    onPeripheralTxStop: () -> Unit,
+    onTransferStart: () -> Unit,
+    onTransferStop: () -> Unit,
 ) {
     Scaffold(
         topBar = { TopAppBar(title = { Text("Central BLE") }) }
@@ -122,16 +118,9 @@ private fun AppScreen(
 
             TwoButtonsRow(
                 leftText = "Stream start",
-                onLeft = onCentralStreamStart,
+                onLeft = onTransferStart,
                 rightText = "Stream stop",
-                onRight = onCentralStreamStop,
-            )
-
-            TwoButtonsRow(
-                leftText = "Peripheral TX start",
-                onLeft = onPeripheralTxStart,
-                rightText = "Peripheral TX stop",
-                onRight = onPeripheralTxStop,
+                onRight = onTransferStop,
             )
 
             Divider()

@@ -7,7 +7,4 @@ sealed interface UiEvent {
 
     data object CentralStreamStartClicked : UiEvent
     data object CentralStreamStopClicked : UiEvent
-
-    data object PeripheralTxStartClicked : UiEvent
-    data object PeripheralTxStopClicked : UiEvent
 }

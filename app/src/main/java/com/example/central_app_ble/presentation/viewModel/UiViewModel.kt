@@ -8,7 +8,6 @@ import com.example.central_app_ble.domain.useCase.ConnectUseCase
 import com.example.central_app_ble.domain.useCase.DisconnectUseCase
 import com.example.central_app_ble.domain.useCase.ObserveConnectionStateUseCase
 import com.example.central_app_ble.domain.useCase.ObserveLogsUseCase
-import com.example.central_app_ble.domain.useCase.PeripheralTxControlUseCase
 import com.example.central_app_ble.domain.useCase.PingUseCase
 import com.example.central_app_ble.domain.useCase.ScanUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -28,7 +27,6 @@ class UiViewModel @Inject constructor(
     private val connectUseCase: ConnectUseCase,
     private val pingUseCase: PingUseCase,
     private val centralStreamUseCase: CentralStreamUseCase,
-    private val peripheralTxControlUseCase: PeripheralTxControlUseCase,
     private val observeLogsUseCase: ObserveLogsUseCase,
     private val observeConnectionStateUseCase: ObserveConnectionStateUseCase,
     private val disconnectUseCase: DisconnectUseCase,
@@ -63,9 +61,6 @@ class UiViewModel @Inject constructor(
 
             UiEvent.CentralStreamStartClicked -> startCentralStream10s()
             UiEvent.CentralStreamStopClicked -> stopCentralStream()
-
-            UiEvent.PeripheralTxStartClicked -> peripheralTxStart()
-            UiEvent.PeripheralTxStopClicked -> peripheralTxStop()
         }
     }
 
@@ -144,32 +139,6 @@ class UiViewModel @Inject constructor(
         streamJob = null
         _state.value = _state.value.copy(isCentralStreaming = false)
         _logs.tryEmit("stream stopped")
-    }
-
-    private fun peripheralTxStart() = viewModelScope.launch {
-        if (_state.value.connectionState != ConnectionState.Ready) {
-            _logs.tryEmit("Not ready: сначала Connect и дождись INIT OK")
-            return@launch
-        }
-        try {
-            peripheralTxControlUseCase.start()
-            _logs.tryEmit("StartStream sent")
-        } catch (e: Exception) {
-            _logs.tryEmit("StartStream failed: ${e.message}")
-        }
-    }
-
-    private fun peripheralTxStop() = viewModelScope.launch {
-        if (_state.value.connectionState != ConnectionState.Ready) {
-            _logs.tryEmit("Not ready: сначала Connect и дождись INIT OK")
-            return@launch
-        }
-        try {
-            peripheralTxControlUseCase.stop()
-            _logs.tryEmit("StopStream sent")
-        } catch (e: Exception) {
-            _logs.tryEmit("StopStream failed: ${e.message}")
-        }
     }
 
     fun onClearedByUi() {

@@ -1,6 +1,5 @@
 package com.example.central_app_ble.di
 
-import android.content.Context
 import com.example.central_app_ble.data.repositoryImpl.BleRepositoryImpl
 import com.example.central_app_ble.domain.repository.BleRepository
 import com.example.central_app_ble.domain.useCase.CentralStreamUseCase
@@ -9,7 +8,6 @@ import com.example.central_app_ble.domain.useCase.DisconnectUseCase
 import com.example.central_app_ble.domain.useCase.ObserveConnectionStateUseCase
 import com.example.central_app_ble.domain.useCase.ObserveLogsUseCase
 import com.example.central_app_ble.domain.useCase.ObserveNotificationsUseCase
-import com.example.central_app_ble.domain.useCase.PeripheralTxControlUseCase
 import com.example.central_app_ble.domain.useCase.PingUseCase
 import com.example.central_app_ble.domain.useCase.ScanUseCase
 import dagger.Binds
@@ -49,12 +47,6 @@ abstract class BleModule {
         @Singleton
         fun provideCentralStreamUseCase(repository: BleRepository) : CentralStreamUseCase {
             return CentralStreamUseCase(repository)
-        }
-
-        @Provides
-        @Singleton
-        fun providePeripheralTxControlUseCase(repository: BleRepository) : PeripheralTxControlUseCase {
-            return PeripheralTxControlUseCase(repository)
         }
 
         @Provides
