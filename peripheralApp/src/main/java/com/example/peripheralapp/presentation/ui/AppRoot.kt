@@ -72,8 +72,10 @@ fun AppRoot() {
         logs = logs,
         listState = listState,
         onClearLog = { viewModel.onEvent(UiEvent.ClearLog) },
-        onStart = { runWithBlePerms(UiEvent.StartClicked) },
-        onStop = { viewModel.onEvent(UiEvent.StopClicked) },
+        onStartServer = { runWithBlePerms(UiEvent.StartServer) },
+        onStopServer = { viewModel.onEvent(UiEvent.StopServer) },
+        onStartTransfer = { viewModel.onEvent(UiEvent.StartTransfer) },
+        onStopTransfer = { viewModel.onEvent(UiEvent.StopTransfer) }
     )
 }
 
@@ -84,8 +86,10 @@ private fun AppScreen(
     logs: List<String>,
     listState: LazyListState,
     onClearLog: () -> Unit,
-    onStart: () -> Unit,
-    onStop: () -> Unit,
+    onStartServer: () -> Unit,
+    onStopServer: () -> Unit,
+    onStartTransfer: () -> Unit,
+    onStopTransfer: () -> Unit,
 ) {
     Scaffold(topBar = { TopAppBar(title = { Text("Peripheral BLE") }) }) { padding ->
         Column(
@@ -100,8 +104,13 @@ private fun AppScreen(
             if (state.lastError != null) Text("Error: ${state.lastError}")
 
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = onStart, modifier = Modifier.weight(1f)) { Text("Start") }
-                Button(onClick = onStop, modifier =Modifier.weight(1f)) { Text("Stop") }
+                Button(onClick = onStartServer, modifier = Modifier.weight(1f)) { Text("Start Server") }
+                Button(onClick = onStopServer, modifier =Modifier.weight(1f)) { Text("Stop Server") }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = onStartTransfer, modifier = Modifier.weight(1f)) { Text("Start TX") }
+                Button(onClick = onStopTransfer, modifier =Modifier.weight(1f)) { Text("Stop TX") }
             }
 
             OutlinedButton(onClick = onClearLog) { Text("Clear log") }

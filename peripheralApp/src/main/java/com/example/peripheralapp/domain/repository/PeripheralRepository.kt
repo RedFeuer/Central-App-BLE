@@ -8,7 +8,9 @@ interface PeripheralRepository {
     val state: StateFlow<PeripheralState>
     val logs: Flow<String>
 
-    fun start()
-    fun stop()
+    fun startServer()
+    fun stopServer()
+    fun startTransfer()
+    fun stopTransfer()
     fun clearStateError()
 }

@@ -5,29 +5,31 @@ import androidx.lifecycle.viewModelScope
 import com.example.peripheralapp.domain.domainModel.PeripheralState
 import com.example.peripheralapp.domain.useCase.ObservePeripheralLogsUseCase
 import com.example.peripheralapp.domain.useCase.ObservePeripheralStateUseCase
-import com.example.peripheralapp.domain.useCase.StartPeripheralUseCase
-import com.example.peripheralapp.domain.useCase.StopPeripheralUseCase
+import com.example.peripheralapp.domain.useCase.StartServerPeripheralUseCase
+import com.example.peripheralapp.domain.useCase.StartTransferPeripheralUseCase
+import com.example.peripheralapp.domain.useCase.StopServerPeripheralUseCase
+import com.example.peripheralapp.domain.useCase.StopTransferPeripheralUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class UiViewModel @Inject constructor (
-    private val startUseCase: StartPeripheralUseCase,
-    private val stopUseCase: StopPeripheralUseCase,
+    private val startServerUseCase: StartServerPeripheralUseCase,
+    private val stopServerUseCase: StopServerPeripheralUseCase,
+    private val startTransferUseCase: StartTransferPeripheralUseCase,
+    private val stopTransferUseCase: StopTransferPeripheralUseCase,
     private val observeState: ObservePeripheralStateUseCase,
     private val observeLogs: ObservePeripheralLogsUseCase,
 ) : ViewModel() {
     private val _state = MutableStateFlow(PeripheralState())
     val state: StateFlow<PeripheralState> = _state.asStateFlow()
 
-    private val _logs = MutableStateFlow<List<String>>(emptyList<String>())
-    val logs = _logs.asSharedFlow()
+    private val _logs = MutableStateFlow<List<String>>(emptyList())
+    val logs = _logs.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -40,9 +42,11 @@ class UiViewModel @Inject constructor (
 
     fun onEvent(e: UiEvent) {
         when (e) {
-            UiEvent.StartClicked -> startUseCase()
-            UiEvent.StopClicked -> stopUseCase()
-            UiEvent.ClearLog -> _logs.value = emptyList<String>()
+            UiEvent.StartServer -> startServerUseCase()
+            UiEvent.StopServer -> stopServerUseCase()
+            UiEvent.StartTransfer -> startTransferUseCase()
+            UiEvent.StopTransfer -> stopTransferUseCase()
+            UiEvent.ClearLog -> _logs.value = emptyList()
         }
     }
 

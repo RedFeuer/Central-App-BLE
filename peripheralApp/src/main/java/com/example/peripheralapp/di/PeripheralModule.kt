@@ -4,8 +4,10 @@ import com.example.peripheralapp.data.repositoryImpl.PeripheralRepositoryImpl
 import com.example.peripheralapp.domain.repository.PeripheralRepository
 import com.example.peripheralapp.domain.useCase.ObservePeripheralLogsUseCase
 import com.example.peripheralapp.domain.useCase.ObservePeripheralStateUseCase
-import com.example.peripheralapp.domain.useCase.StartPeripheralUseCase
-import com.example.peripheralapp.domain.useCase.StopPeripheralUseCase
+import com.example.peripheralapp.domain.useCase.StartServerPeripheralUseCase
+import com.example.peripheralapp.domain.useCase.StartTransferPeripheralUseCase
+import com.example.peripheralapp.domain.useCase.StopServerPeripheralUseCase
+import com.example.peripheralapp.domain.useCase.StopTransferPeripheralUseCase
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -23,14 +25,26 @@ abstract class PeripheralModule {
     companion object {
         @Provides
         @Singleton
-        fun provideStartPeripheralUseCase(repository: PeripheralRepository) : StartPeripheralUseCase {
-            return StartPeripheralUseCase(repository)
+        fun provideStartServerPeripheralUseCase(repository: PeripheralRepository) : StartServerPeripheralUseCase {
+            return StartServerPeripheralUseCase(repository)
         }
 
         @Provides
         @Singleton
-        fun provideStopPeripheralUseCase(repository: PeripheralRepository) : StopPeripheralUseCase {
-            return StopPeripheralUseCase(repository)
+        fun provideStopServerPeripheralUseCase(repository: PeripheralRepository) : StopServerPeripheralUseCase {
+            return StopServerPeripheralUseCase(repository)
+        }
+
+        @Provides
+        @Singleton
+        fun provideStartTransferPeripheralUseCase(repository: PeripheralRepository) : StartTransferPeripheralUseCase {
+            return StartTransferPeripheralUseCase(repository)
+        }
+
+        @Provides
+        @Singleton
+        fun provideStopTransferPeripheralUseCase(repository: PeripheralRepository) : StopTransferPeripheralUseCase {
+            return StopTransferPeripheralUseCase(repository)
         }
 
         @Provides
