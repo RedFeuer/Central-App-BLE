@@ -4,10 +4,10 @@
     <selectionStates>
       <SelectionState runConfigName="peripheralApp">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2026-02-16T17:01:43.524262700Z">
+        <DropdownSelection timestamp="2026-02-17T10:30:45.123563100Z">
           <Target type="DEFAULT_BOOT">
             <handle>
-              <DeviceId pluginId="PhysicalDevice" identifier="serial=88add24c" />
+              <DeviceId pluginId="PhysicalDevice" identifier="serial=26131FDF6004YC" />
             </handle>
           </Target>
         </DropdownSelection>
@@ -15,7 +15,7 @@
       </SelectionState>
       <SelectionState runConfigName="app">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2026-02-16T17:02:46.614944400Z">
+        <DropdownSelection timestamp="2026-02-17T10:44:49.411783Z">
           <Target type="DEFAULT_BOOT">
             <handle>
               <DeviceId pluginId="PhysicalDevice" identifier="serial=26131FDF6004YC" />
