@@ -2,8 +2,9 @@ package com.example.peripheralapp.data.ble
 
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import javax.inject.Inject
 
-class PeripheralEventBus() {
+class PeripheralEventBus @Inject constructor () {
     private val _logs = MutableSharedFlow<String>(extraBufferCapacity = 512)
     val logs = _logs.asSharedFlow()
 

@@ -8,8 +8,9 @@ import com.example.peripheralapp.domain.domainModel.PeripheralState
 import com.example.peripheralapp.domain.repository.PeripheralRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import javax.inject.Inject
 
-class PeripheralRepositoryImpl(
+class PeripheralRepositoryImpl @Inject constructor (
     private val server: AndroidBlePeripheralServer,
     private val bus: PeripheralEventBus,
 ) : PeripheralRepository {

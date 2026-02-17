@@ -24,6 +24,7 @@ import com.example.shared.BleUuids
 import com.example.shared.Command
 import com.example.shared.CommandCodec
 import com.example.shared.Protocol
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,9 +35,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
+import javax.inject.Inject
 
-class AndroidBlePeripheralServer(
-    private val context: Context,
+class AndroidBlePeripheralServer @Inject constructor (
+    @ApplicationContext private val context: Context,
     private val bus: PeripheralEventBus,
 ) {
     private val btManager = context.getSystemService(BluetoothManager::class.java)
@@ -71,7 +73,6 @@ class AndroidBlePeripheralServer(
 
         require(adapter.isEnabled) { "Bluetooth выключен" }
 
-        // менять имя — не обязательно; иногда может дать SecurityException
         runCatching { adapter.name = deviceName }.onFailure {
             bus.log("setName failed: ${it.message}")
         }

@@ -1,5 +1,6 @@
 package com.example.central_app_ble.presentation.ui
 
+import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -36,10 +37,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.central_app_ble.presentation.permissions.BlePermissionGate
 import com.example.central_app_ble.presentation.viewModel.UiEvent
 import com.example.central_app_ble.presentation.viewModel.UiState
 import com.example.central_app_ble.presentation.viewModel.UiViewModel
+import com.example.shared.BlePermissionGate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 
@@ -221,6 +222,10 @@ private fun rememberRunWithBlePerms(
 
     val permGate = remember(appContext) {
         BlePermissionGate(
+            requiredPerms31 = arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ),
             request = { permsLauncher.launch(it) }, // запуск запроса разрешений
             isGranted = { permission -> // проверка конктретного разрешения
                 ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
