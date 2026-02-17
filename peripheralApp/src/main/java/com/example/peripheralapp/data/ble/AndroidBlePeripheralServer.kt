@@ -39,7 +39,7 @@ import javax.inject.Inject
 
 class AndroidBlePeripheralServer @Inject constructor (
     @ApplicationContext private val context: Context,
-    private val bus: PeripheralLogBus,
+    private val logBus: PeripheralLogBus,
 ) {
     private val btManager = context.getSystemService(BluetoothManager::class.java)
     private val adapter: BluetoothAdapter = btManager.adapter
@@ -67,21 +67,21 @@ class AndroidBlePeripheralServer @Inject constructor (
     fun start(deviceName: String = "BLE-Peripheral") {
         if (!isPeripheralSupported()) {
             _state.value = _state.value.copy(isSupported = false, lastError = "Peripheral/Advertising не поддерживается")
-            bus.log(message = "Peripheral/Advertising НЕ поддерживается")
+            logBus.log(message = "Peripheral/Advertising НЕ поддерживается")
             return
         }
 
         require(adapter.isEnabled) { "Bluetooth выключен" }
 
         runCatching { adapter.name = deviceName }.onFailure {
-            bus.log(message = "setName failed: ${it.message}")
+            logBus.log(message = "setName failed: ${it.message}")
         }
 
         startGattServer()
         startAdvertising()
 
         _state.value = _state.value.copy(isSupported = true, isRunning = true, lastError = null)
-        bus.log(message = "Peripheral запущен: advertising + GATT server")
+        logBus.log(message = "Peripheral запущен: advertising + GATT server")
         publishCounters()
     }
 
@@ -90,12 +90,12 @@ class AndroidBlePeripheralServer @Inject constructor (
 
         runCatching {
             advertiser?.stopAdvertising(advCallback)
-        }.onFailure { bus.log(message = "stopAdvertising failed: ${it.message}") }
+        }.onFailure { logBus.log(message = "stopAdvertising failed: ${it.message}") }
         advertiser = null
 
         runCatching {
             gattServer?.close()
-        }.onFailure { bus.log(message = "gattServer.close failed: ${it.message}") }
+        }.onFailure { logBus.log(message = "gattServer.close failed: ${it.message}") }
         gattServer = null
 
         subscribedCmd.clear()
@@ -103,13 +103,17 @@ class AndroidBlePeripheralServer @Inject constructor (
         connected.clear()
 
         _state.value = _state.value.copy(isRunning = false)
-        bus.log(message = "Peripheral stopped")
+        logBus.log(message = "Peripheral stopped")
         publishCounters()
     }
 
     /* Peripheral -> Central */
     fun startTransfer() {
-        if (txJob?.isActive == true) return
+        /* если Transfer уже запущен, то не плодим задачи, а просто выходим */
+        if (txJob?.isActive == true) {
+            logBus.log(message = "Peripheral TX is already started")
+            return
+        }
 
         txJob = txScope.launch {
             var tick = 0
@@ -123,7 +127,7 @@ class AndroidBlePeripheralServer @Inject constructor (
                 buf[3] = ((s shr 24) and 0xFF).toByte()
 
                 if (tick++ % 16 == 0) {
-                    bus.log(message = "TX tick seq=$s subscribedData=${subscribedData.size}")
+                    logBus.log(message = "TX tick seq=$s subscribedData=${subscribedData.size}")
                 }
 
                 for (dev in subscribedData) {
@@ -133,14 +137,13 @@ class AndroidBlePeripheralServer @Inject constructor (
                 delay(Protocol.STREAM_PERIOD_MS)
             }
         }
-
-        bus.log(message = "TX stream started; subscribedData=${subscribedData.size}")
+        logBus.log(message = "Peripheral TX started; subscribedData=${subscribedData.size}")
     }
 
     fun stopTransfer() {
         txJob?.cancel()
         txJob = null
-        bus.log(message = "TX stream stopped")
+        logBus.log(message = "TX stream stopped")
     }
 
     fun clearError() {
@@ -199,7 +202,7 @@ class AndroidBlePeripheralServer @Inject constructor (
         service.addCharacteristic(dataTxChar)
 
         val ok = server.addService(service)
-        bus.log(message = "addService: $ok")
+        logBus.log(message = "addService: $ok")
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
@@ -227,23 +230,23 @@ class AndroidBlePeripheralServer @Inject constructor (
 
     private val advCallback = object : AdvertiseCallback() {
         override fun onStartFailure(errorCode: Int) {
-            bus.log(message = "Advertising failed: $errorCode")
+            logBus.log(message = "Advertising failed: $errorCode")
             _state.value = _state.value.copy(lastError = "Advertising failed: $errorCode")
         }
 
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
-            bus.log(message = "Advertising started")
+            logBus.log(message = "Advertising started")
         }
     }
 
     private val gattCallback = object : BluetoothGattServerCallback() {
 
         override fun onServiceAdded(status: Int, service: BluetoothGattService) {
-            bus.log(message = "Service added status=$status uuid=${service.uuid}")
+            logBus.log(message = "Service added status=$status uuid=${service.uuid}")
         }
 
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            bus.log(message = "Conn state: ${device.address}, status=$status, newState=$newState")
+            logBus.log(message = "Conn state: ${device.address}, status=$status, newState=$newState")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 connected.add(device)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
@@ -272,7 +275,7 @@ class AndroidBlePeripheralServer @Inject constructor (
                 BleUuids.DATA_TX -> if (enabled) subscribedData.add(device) else subscribedData.remove(device)
             }
 
-            bus.log(message = "CCCD write for $charUuid enabled=$enabled subCmd=${subscribedCmd.size} subData=${subscribedData.size}")
+            logBus.log(message = "CCCD write for $charUuid enabled=$enabled subCmd=${subscribedCmd.size} subData=${subscribedData.size}")
             publishCounters()
 
             if (responseNeeded) {
@@ -294,21 +297,21 @@ class AndroidBlePeripheralServer @Inject constructor (
 
                 BleUuids.CMD_RX -> {
                     val cmd = CommandCodec.decode(value)
-                    bus.log(message = "CMD_RX decoded=$cmd rawSize=${value.size}")
+                    logBus.log(message = "CMD_RX decoded=$cmd rawSize=${value.size}")
 
                     when (cmd) {
                         Command.Ping -> notifyCmd(device, Command.Pong)
-                        null -> bus.log(message = "CMD_RX unknown bytes size=${value.size}")
+                        null -> logBus.log(message = "CMD_RX unknown bytes size=${value.size}")
                         else -> {}
                     }
                 }
 
                 BleUuids.DATA_RX -> {
-                    bus.log(message = "DATA_RX size=${value.size}")
+                    logBus.log(message = "DATA_RX size=${value.size}")
                     if (value.size == Protocol.STREAM_BLOCK_SIZE) {
                         notifyData(device, value)
                     } else {
-                        bus.log(message = "DATA_RX wrong size=${value.size}")
+                        logBus.log(message = "DATA_RX wrong size=${value.size}")
                     }
                 }
             }

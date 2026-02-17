@@ -63,7 +63,9 @@ fun AppRoot() {
 
     val runWithBlePerms = rememberRunWithPeripheralBlePerms(
         appContext = appContext,
-        log = { viewModel.logs; },
+        log = { log ->
+            viewModel.appendLog(log)
+        },
         onEvent = { viewModel.onEvent(it) }
     )
 
@@ -149,6 +151,7 @@ private fun rememberRunWithPeripheralBlePerms(
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
+        log("permissions result: $result")
         val allGranted = result.values.all { it }
         if (allGranted) {
             pending?.let {
