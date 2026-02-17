@@ -26,7 +26,7 @@ class UiViewModel @Inject constructor (
     private val _state = MutableStateFlow(PeripheralState())
     val state: StateFlow<PeripheralState> = _state.asStateFlow()
 
-    private val _logs = MutableSharedFlow<String>(extraBufferCapacity = 256)
+    private val _logs = MutableStateFlow<List<String>>(emptyList<String>())
     val logs = _logs.asSharedFlow()
 
     init {
@@ -34,7 +34,7 @@ class UiViewModel @Inject constructor (
             observeState().collect { _state.value = it }
         }
         viewModelScope.launch {
-            observeLogs().collect { _logs.tryEmit(it) }
+            observeLogs().collect { appendLog(it) }
         }
     }
 
@@ -42,7 +42,11 @@ class UiViewModel @Inject constructor (
         when (e) {
             UiEvent.StartClicked -> startUseCase()
             UiEvent.StopClicked -> stopUseCase()
-            UiEvent.ClearLog -> _logs.tryEmit("----- cleared in UI -----")
+            UiEvent.ClearLog -> _logs.value = emptyList<String>()
         }
+    }
+
+    fun appendLog(line: String) {
+        _logs.value = (_logs.value + line).takeLast(2000)
     }
 }

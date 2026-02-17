@@ -54,7 +54,12 @@ fun AppRoot() {
     val viewModel = hiltViewModel<UiViewModel>()
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    val logsUi = rememberLogsUi(viewModel.logs)
+    val logs by viewModel.logs.collectAsStateWithLifecycle(emptyList())
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(logs.size) {
+        if (logs.isNotEmpty()) listState.scrollToItem(logs.lastIndex)
+    }
 
     val runWithBlePerms = rememberRunWithPeripheralBlePerms(
         appContext = appContext,
@@ -64,9 +69,9 @@ fun AppRoot() {
 
     AppScreen(
         state = state,
-        logs = logsUi.logs,
-        listState = logsUi.listState,
-        onClearLog = { logsUi.logs.clear() },
+        logs = logs,
+        listState = listState,
+        onClearLog = { viewModel.onEvent(UiEvent.ClearLog) },
         onStart = { runWithBlePerms(UiEvent.StartClicked) },
         onStop = { viewModel.onEvent(UiEvent.StopClicked) },
     )
@@ -158,16 +163,11 @@ private fun rememberRunWithPeripheralBlePerms(
     }
 
     return { event ->
-        when (event) {
-            UiEvent.StartClicked -> {
-                if (gate.ensurePermsOrRequest()) {
-                    pending = null
-                    onEvent(event)
-                } else {
-                    pending = event
-                }
-            }
-            else -> onEvent(event)
+        if (gate.ensurePermsOrRequest()) {
+            pending = null
+            onEvent(event)
+        } else {
+            pending = event
         }
     }
 }
