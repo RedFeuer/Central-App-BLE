@@ -6,7 +6,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
-class CentralStreamUseCase(
+class CentralTransferUseCase(
     private val repo: BleRepository,
 ) {
     /* central -> peripheral: блоки 160 байт каждые 60мс

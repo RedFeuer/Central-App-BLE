@@ -2,7 +2,7 @@ package com.example.central_app_ble.di
 
 import com.example.central_app_ble.data.repositoryImpl.BleRepositoryImpl
 import com.example.central_app_ble.domain.repository.BleRepository
-import com.example.central_app_ble.domain.useCase.CentralStreamUseCase
+import com.example.central_app_ble.domain.useCase.CentralTransferUseCase
 import com.example.central_app_ble.domain.useCase.ConnectUseCase
 import com.example.central_app_ble.domain.useCase.DisconnectUseCase
 import com.example.central_app_ble.domain.useCase.ObserveConnectionStateUseCase
@@ -45,13 +45,13 @@ abstract class BleModule {
 
         @Provides
         @Singleton
-        fun provideCentralStreamUseCase(repository: BleRepository) : CentralStreamUseCase {
-            return CentralStreamUseCase(repository)
+        fun provideCentralTransferUseCase(repository: BleRepository) : CentralTransferUseCase {
+            return CentralTransferUseCase(repository)
         }
 
         @Provides
         @Singleton
-        fun provideObserceNotificationsUseCase(repository: BleRepository) : ObserveNotificationsUseCase {
+        fun provideObserveNotificationsUseCase(repository: BleRepository) : ObserveNotificationsUseCase {
             return ObserveNotificationsUseCase(repository)
         }
 

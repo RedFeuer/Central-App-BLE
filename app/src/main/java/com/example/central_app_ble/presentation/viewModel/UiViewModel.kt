@@ -3,7 +3,7 @@ package com.example.central_app_ble.presentation.viewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.central_app_ble.domain.domainModel.ConnectionState
-import com.example.central_app_ble.domain.useCase.CentralStreamUseCase
+import com.example.central_app_ble.domain.useCase.CentralTransferUseCase
 import com.example.central_app_ble.domain.useCase.ConnectUseCase
 import com.example.central_app_ble.domain.useCase.DisconnectUseCase
 import com.example.central_app_ble.domain.useCase.ObserveConnectionStateUseCase
@@ -26,7 +26,7 @@ class UiViewModel @Inject constructor(
     private val scanUseCase: ScanUseCase,
     private val connectUseCase: ConnectUseCase,
     private val pingUseCase: PingUseCase,
-    private val centralStreamUseCase: CentralStreamUseCase,
+    private val centralTransferUseCase: CentralTransferUseCase,
     private val observeLogsUseCase: ObserveLogsUseCase,
     private val observeConnectionStateUseCase: ObserveConnectionStateUseCase,
     private val disconnectUseCase: DisconnectUseCase,
@@ -59,8 +59,8 @@ class UiViewModel @Inject constructor(
             UiEvent.ConnectClicked -> connect()
             UiEvent.PingClicked -> ping()
 
-            UiEvent.CentralStreamStartClicked -> startCentralStream10s()
-            UiEvent.CentralStreamStopClicked -> stopCentralStream()
+            UiEvent.CentralStreamStartClicked -> startCentralTransfer()
+            UiEvent.CentralStreamStopClicked -> stopCentralTransfer()
         }
     }
 
@@ -104,7 +104,7 @@ class UiViewModel @Inject constructor(
         }
     }
 
-    private fun startCentralStream10s() {
+    private fun startCentralTransfer() {
         if (streamJob?.isActive == true) {
             _logs.tryEmit("stream already running")
             return
@@ -119,7 +119,7 @@ class UiViewModel @Inject constructor(
 
         streamJob = viewModelScope.launch {
             try {
-                val sent = centralStreamUseCase(durationMs = 10_000)
+                val sent = centralTransferUseCase(durationMs = 10_000)
                 _logs.tryEmit("stream done. blocksSent=$sent")
             } catch (e: CancellationException) {
                 /* отдельно обрабатываем отмену корутины, чтобы не засорять логи */
@@ -134,7 +134,7 @@ class UiViewModel @Inject constructor(
         }
     }
 
-    private fun stopCentralStream() {
+    private fun stopCentralTransfer() {
         streamJob?.cancel()
         streamJob = null
         _state.value = _state.value.copy(isCentralStreaming = false)
@@ -142,7 +142,7 @@ class UiViewModel @Inject constructor(
     }
 
     fun onClearedByUi() {
-        stopCentralStream()
+        stopCentralTransfer()
         disconnectUseCase()
     }
 
