@@ -5,6 +5,8 @@ sealed interface UiEvent {
     data object ConnectClicked : UiEvent
     data object PingClicked : UiEvent
 
+    data object DisconnectClicked: UiEvent
+
     data object CentralStreamStartClicked : UiEvent
     data object CentralStreamStopClicked : UiEvent
 }

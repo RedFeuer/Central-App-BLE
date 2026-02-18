@@ -36,6 +36,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
+import kotlin.math.log
 
 class AndroidBlePeripheralServer @Inject constructor (
     @ApplicationContext private val context: Context,
@@ -85,8 +86,12 @@ class AndroidBlePeripheralServer @Inject constructor (
         publishCounters()
     }
 
+    @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE])
     fun stop() {
         stopTransfer()
+
+        /* отключаем все Central девайсы от Peripheral при остановке сервера */
+        disconnectAllCentrals()
 
         runCatching {
             advertiser?.stopAdvertising(advCallback)
@@ -107,7 +112,20 @@ class AndroidBlePeripheralServer @Inject constructor (
         publishCounters()
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private fun disconnectAllCentrals() {
+        val server = gattServer ?: return
+        logBus.log(message = "disconnectAllCentrals: connected=${connected.size}")
+
+        /* отключаем от Peripheral все Central */
+        for (dev in connected) {
+            runCatching { server.cancelConnection(dev) }
+                .onFailure { logBus.log(message = "cancelConnection failed ${dev.address}: ${it.message}") }
+        }
+    }
+
     /* Peripheral -> Central */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun startTransfer() {
         /* если Transfer уже запущен, то не плодим задачи, а просто выходим */
         if (txJob?.isActive == true) {
@@ -322,6 +340,7 @@ class AndroidBlePeripheralServer @Inject constructor (
         }
     }
 
+    /* обновляем счетчики подключенных устройств */
     private fun publishCounters() {
         _state.value = _state.value.copy(
             connectedCount = connected.size,
@@ -332,7 +351,10 @@ class AndroidBlePeripheralServer @Inject constructor (
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun notifyCmd(device: BluetoothDevice, cmd: Command) {
-        if (!subscribedCmd.contains(device)) return
+        if (!subscribedCmd.contains(device)) {
+            logBus.log(message = "DROP CMD notify: not subscribed dev=${device.address} cmd=$cmd")
+            return
+        }
         notifyCharacteristic(device, cmdTxChar, CommandCodec.encode(cmd))
     }
 

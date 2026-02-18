@@ -6,5 +6,7 @@ sealed interface ConnectionState {
     data object Bonding : ConnectionState
     data object Connecting : ConnectionState
     data object Ready : ConnectionState
+
+    data class Disconnected(val status: Int, val newState: Int): ConnectionState
     data class Error(val message: String) : ConnectionState
 }

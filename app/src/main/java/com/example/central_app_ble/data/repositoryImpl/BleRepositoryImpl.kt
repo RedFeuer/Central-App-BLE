@@ -10,6 +10,7 @@ import com.example.central_app_ble.data.ble.callback.AndroidGattClientFactory
 import com.example.central_app_ble.data.ble.callback.GattEvent
 import com.example.central_app_ble.data.ble.callback.GattEventBus
 import com.example.central_app_ble.data.mapper.BluetoothDeviceMapper
+import com.example.central_app_ble.di.AppScope
 import com.example.central_app_ble.domain.domainModel.BleDevice
 import com.example.central_app_ble.domain.domainModel.BleNotification
 import com.example.central_app_ble.domain.domainModel.ConnectionState
@@ -17,19 +18,31 @@ import com.example.central_app_ble.domain.repository.BleRepository
 import com.example.shared.Command
 import com.example.shared.CommandCodec
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.scan
+import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
 
+private sealed interface RepoAction {
+    data class SetState(val state: ConnectionState) : RepoAction
+    data class RemoteDisconnected(val status: Int, val newState: Int) : RepoAction
+}
 class BleRepositoryImpl @Inject constructor (
     @ApplicationContext private val appContext: Context,
     private val bus: GattEventBus, /* шина Gatt */
     private val scanner: AndroidBleScanner,
     private val bonding: AndroidBondingManager,
     private val gattFactory: AndroidGattClientFactory, // фабрика для создания gattClient
+    @AppScope private val appScope: CoroutineScope,
 ) : BleRepository {
     override val logs: Flow<String> =
         bus.events.filterIsInstance<GattEvent.Log>().map { it.line }
@@ -37,15 +50,44 @@ class BleRepositoryImpl @Inject constructor (
     override val notifications: Flow<BleNotification> =
         bus.events.filterIsInstance<GattEvent.Notify>().map { it.notification }
 
-    private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
-    override val connectionState: StateFlow<ConnectionState> = _connectionState
+    private val actions = MutableSharedFlow<RepoAction>(extraBufferCapacity = 64)
+
+    /* поток дисконектов */
+    private val remoteDisconnectedActions: Flow<RepoAction> =
+        bus.events
+            .filterIsInstance<GattEvent.Disconnected>() // фильтруем события
+            .onEach { closeGatt() } // закрываем GATT сразу при разрыве соединения
+            .map{ RepoAction.RemoteDisconnected(it.status, it.newState) } // маппим событие GattEvent.Disconnected -> RepoAction
+
+    /* склеиваем два потока в один */
+    override val connectionState: StateFlow<ConnectionState> =
+        merge(actions, remoteDisconnectedActions)
+            .scan<RepoAction, ConnectionState>(ConnectionState.Idle) { _,action ->
+                when (action) {
+                    is RepoAction.SetState -> action.state // ставим новое состояние
+                    is RepoAction.RemoteDisconnected -> ConnectionState.Disconnected(action.status, action.newState) // ставим состояние дисконнекта
+                }
+            }
+            .stateIn(appScope, SharingStarted.Eagerly, ConnectionState.Idle)
+
 
     /* Central-устройство (Клиент) */
     private var gattClient: AndroidGattClient? = null
 
+    private fun closeGatt() {
+        runCatching { gattClient?.close() }
+        gattClient = null
+    }
+
+    /* закрываем старый GATT и меняем состояние на ожидание */
+    override fun disconnect() {
+        closeGatt()
+        setState(ConnectionState.Idle)
+    }
+
     @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     override suspend fun scanFirst(timeoutMs: Long): BleDevice? {
-        _connectionState.value = ConnectionState.Scanning // сканируем
+        setState(ConnectionState.Scanning) // сканируем
         bus.log("scan start")
 
         val res = scanner.scanFirst(timeoutMs) // вызов сканнера
@@ -56,7 +98,7 @@ class BleRepositoryImpl @Inject constructor (
         } else null
 
         bus.log("scan stop; selected=${dev?.address ?: "none"}")
-        _connectionState.value = ConnectionState.Idle // ожидание действий
+        setState(ConnectionState.Idle) // ожидание действий
         return dev
     }
 
@@ -65,11 +107,11 @@ class BleRepositoryImpl @Inject constructor (
         disconnect() // закрываем GATT и меняем состояние на ожидание
 
         /* связывание */
-        _connectionState.value = ConnectionState.Bonding
+        setState(ConnectionState.Bonding)
         bonding.ensureBonded(device.address)
         bus.log("BONDED OK")
 
-        _connectionState.value = ConnectionState.Connecting
+        setState(ConnectionState.Connecting)
 
         /* создаем клиента через фабрику */
         val client = gattFactory.create(device.address)
@@ -77,20 +119,11 @@ class BleRepositoryImpl @Inject constructor (
 
         try {
             client.connectAndInit()
-            _connectionState.value = ConnectionState.Ready
+            setState(ConnectionState.Ready)
         } catch (e: Exception) {
-            _connectionState.value = ConnectionState.Error(e.message ?: "connect/init error")
+            setState(ConnectionState.Error(e.message ?: "connect/init error"))
             disconnect()
             throw e
-        }
-    }
-
-    /* закрываем старый GATT и меняем состояние на ожидание */
-    override fun disconnect() {
-        runCatching { gattClient?.close() }
-        gattClient = null
-        if (_connectionState.value != ConnectionState.Idle) {
-            _connectionState.value = ConnectionState.Idle
         }
     }
 
@@ -105,5 +138,9 @@ class BleRepositoryImpl @Inject constructor (
     override suspend fun writeCentralData(bytes: ByteArray) {
         val client = gattClient ?: error("not connected")
         client.writeDataNoResp(bytes)
+    }
+
+    private fun setState(state: ConnectionState) {
+        actions.tryEmit(RepoAction.SetState(state))
     }
 }

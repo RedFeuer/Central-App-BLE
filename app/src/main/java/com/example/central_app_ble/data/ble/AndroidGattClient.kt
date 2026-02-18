@@ -60,8 +60,27 @@ class AndroidGattClient @AssistedInject constructor(
         /* callback для connected */
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             bus.log("connState status=$status newState=$newState")
+
+            /* успешное подключение */
             if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
                 connected.complete(Unit)
+                return
+            }
+
+            /* ошибка соединения */
+            val disconnected = newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS
+            if (disconnected) {
+                val exception = IllegalStateException("GATT disconnected status=$status newState=$newState")
+
+                /* если connectAndInit() сейчас ждет - то пусть падает, а не ждет до timeoutMs */
+                if (!connected.isCompleted) connected.completeExceptionally(exception)
+                if (!servicesDiscovered.isCompleted) servicesDiscovered.completeExceptionally(exception)
+                if (!mtuChanged.isCompleted) mtuChanged.completeExceptionally(exception)
+                descWriteWaiter?.completeExceptionally(exception)
+                descWriteWaiter = null
+
+                /* сообщаем репозиторию, что потеряли связь */
+                bus.disconnected(status, newState)
             }
         }
 

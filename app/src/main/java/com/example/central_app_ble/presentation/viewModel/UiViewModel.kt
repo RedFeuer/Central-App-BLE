@@ -47,7 +47,21 @@ class UiViewModel @Inject constructor(
         /* реактивное отображение работы Central устройства */
         viewModelScope.launch {
             observeConnectionStateUseCase().collect { connectionState ->
-                _state.value = _state.value.copy(connectionState = connectionState)
+                when (connectionState) {
+                    is ConnectionState.Disconnected -> {
+                        stopCentralTransfer()
+                        disconnectUseCase() // добавил проверить
+                        _state.value = _state.value.copy(
+                            connectionState = ConnectionState.Idle,
+                            selected = null,
+                            isCentralStreaming = false,
+                        )
+                        _logs.tryEmit("REMOTE DISCONNECTED status=${connectionState.status} newState=${connectionState.newState}")
+                    }
+                    else -> {
+                        _state.value = _state.value.copy(connectionState = connectionState)
+                    }
+                }
             }
         }
     }
@@ -58,6 +72,7 @@ class UiViewModel @Inject constructor(
             UiEvent.ScanClicked -> scan()
             UiEvent.ConnectClicked -> connect()
             UiEvent.PingClicked -> ping()
+            UiEvent.DisconnectClicked -> disconnectUseCase()
 
             UiEvent.CentralStreamStartClicked -> startCentralTransfer()
             UiEvent.CentralStreamStopClicked -> stopCentralTransfer()

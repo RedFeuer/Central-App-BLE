@@ -71,6 +71,7 @@ fun AppRoot() {
         onScan = { runWithBlePermissions(UiEvent.ScanClicked) },
         onConnect = { runWithBlePermissions(UiEvent.ConnectClicked) },
         onPing = { runWithBlePermissions(UiEvent.PingClicked) },
+        onDisconnect = { runWithBlePermissions(UiEvent.DisconnectClicked) },
         onTransferStart = { runWithBlePermissions(UiEvent.CentralStreamStartClicked) },
         onTransferStop = { runWithBlePermissions(UiEvent.CentralStreamStopClicked) },
     )
@@ -86,6 +87,7 @@ private fun AppScreen(
     onScan: () -> Unit,
     onConnect: () -> Unit,
     onPing: () -> Unit,
+    onDisconnect: () -> Unit,
     onTransferStart: () -> Unit,
     onTransferStop: () -> Unit,
 ) {
@@ -104,8 +106,8 @@ private fun AppScreen(
             TwoButtonsRow(
                 leftText = "Scan (5s)",
                 onLeft = onScan,
-                rightText = "Clear log",
-                onRight = onClearLog,
+                rightText = "Disconnect",
+                onRight = onDisconnect,
                 rightOutlined = true,
             )
 
@@ -125,7 +127,15 @@ private fun AppScreen(
 
             Divider()
 
-            Text("Log:")
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Log:",
+                    modifier = Modifier.weight(1f),
+                )
+                Button(
+                    onClick = onClearLog
+                ) { Text("ClearLog") }
+            }
             LogsList(logs = logs, listState = listState)
         }
     }
