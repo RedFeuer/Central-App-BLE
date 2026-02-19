@@ -46,6 +46,19 @@ import com.example.shared.BlePermissions
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 
+/**
+ * Корневой экран Peripheral-приложения.
+ *
+ * Назначение:
+ * - подписывается на состояние из [UiViewModel];
+ * - отображает журнал работы;
+ * - формирует обработчик действий, который запускает команды только при наличии разрешений Bluetooth;
+ * - передаёт данные и обработчики в [AppScreen].
+ *
+ * Поведение с журналом:
+ * - список [logs] берётся из viewModel как готовый список строк;
+ * - при добавлении новой строки автоматически прокручивает список вниз.
+ */
 @RequiresApi(Build.VERSION_CODES.S)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,6 +94,22 @@ fun AppRoot() {
     )
 }
 
+/**
+ * Основной экран управления Peripheral-частью.
+ *
+ * Показывает:
+ * - поддержку BLE на устройстве;
+ * - факт запуска сервера;
+ * - количество подключённых центральных устройств;
+ * - наличие подписки на уведомления по командному и потоковому каналам;
+ * - последнюю ошибку;
+ * - журнал событий.
+ *
+ * Кнопки:
+ * - Start Server / Stop Server — запуск и остановка GATT-сервера и рекламы;
+ * - Start TX / Stop TX — управление отправкой данных;
+ * - Clear log — очистка журнала.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppScreen(
@@ -124,6 +153,14 @@ private fun AppScreen(
     }
 }
 
+/**
+ * Список строк журнала.
+ *
+ * Назначение:
+ * - отображает журнал в виде прокручиваемого списка;
+ * - использует [listState], чтобы внешний код мог управлять прокруткой
+ *   (автоматически прокручивать к последнему элементу).
+ */
 @Composable
 private fun LogsList(logs: List<String>, listState: LazyListState) {
     LazyColumn(
@@ -138,6 +175,22 @@ private fun LogsList(logs: List<String>, listState: LazyListState) {
     }
 }
 
+/**
+ * Формирует обработчик пользовательских действий, который выполняет действие только при наличии разрешений BLE.
+ *
+ * Назначение:
+ * - проверяет наличие разрешений для Peripheral (`BLUETOOTH_ADVERTISE` и `BLUETOOTH_CONNECT` на Android 12+);
+ * - если разрешений нет — запускает системный запрос и запоминает действие как отложенное;
+ * - после выдачи всех разрешений выполняет отложенное действие.
+ *
+ * Параметры:
+ * - [appContext] используется для проверки разрешений;
+ * - [log] — вывод диагностических сообщений (например, результат запроса разрешений);
+ * - [onEvent] — реальная обработка действия (передача события в viewModel).
+ *
+ * Возвращает:
+ * - функцию вида `(UiEvent) -> Unit`, которую можно напрямую вызывать при нажатии кнопок.
+ */
 @RequiresApi(Build.VERSION_CODES.S)
 @Composable
 private fun rememberRunWithPeripheralBlePerms(
@@ -179,28 +232,4 @@ private fun rememberRunWithPeripheralBlePerms(
             pending = event
         }
     }
-}
-
-@Stable
-private class LogsUiState(
-    val logs: MutableList<String>,
-    val listState: LazyListState,
-)
-
-@Composable
-private fun rememberLogsUi(logsFlow: Flow<String>): LogsUiState {
-    val logs = remember { mutableStateListOf<String>() }
-    val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-
-    LaunchedEffect(logsFlow) {
-        logsFlow.collect { line ->
-            logs.add(line)
-            if (logs.size > 2000) logs.removeRange(0, logs.size - 2000)
-            scope.launch {
-                if (logs.isNotEmpty()) listState.scrollToItem(logs.lastIndex)
-            }
-        }
-    }
-    return remember { LogsUiState(logs, listState) }
 }
