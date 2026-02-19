@@ -1,6 +1,5 @@
 package com.example.peripheralapp.presentation.ui
 
-import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -43,6 +42,7 @@ import com.example.peripheralapp.domain.domainModel.PeripheralState
 import com.example.peripheralapp.presentation.viewModel.UiEvent
 import com.example.peripheralapp.presentation.viewModel.UiViewModel
 import com.example.shared.BlePermissionGate
+import com.example.shared.BlePermissions
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 
@@ -163,10 +163,7 @@ private fun rememberRunWithPeripheralBlePerms(
 
     val gate = remember(appContext) {
         BlePermissionGate(
-            requiredPerms31 = arrayOf(
-                Manifest.permission.BLUETOOTH_ADVERTISE,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ),
+            requiredPerms = BlePermissions.peripheralRuntime(),
             request = { launcher.launch(it) },
             isGranted = { perm ->
                 ContextCompat.checkSelfPermission(appContext, perm) == PackageManager.PERMISSION_GRANTED
