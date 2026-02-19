@@ -49,15 +49,17 @@ import kotlinx.coroutines.launch
 /**
  * Корневой экран Peripheral-приложения.
  *
- * Назначение:
- * - подписывается на состояние из [UiViewModel];
- * - отображает журнал работы;
- * - формирует обработчик действий, который запускает команды только при наличии разрешений Bluetooth;
- * - передаёт данные и обработчики в [AppScreen].
+ * Ответственность:
+ * - получает [UiViewModel] через внедрение зависимостей;
+ * - подписывается на [PeripheralState] с учётом жизненного цикла;
+ * - собирает поток строк журнала из viewModel в список для отображения;
+ * - оборачивает пользовательские действия в проверку разрешений Bluetooth;
+ * - передаёт состояние и обработчики событий в [AppScreen].
  *
  * Поведение с журналом:
- * - список [logs] берётся из viewModel как готовый список строк;
- * - при добавлении новой строки автоматически прокручивает список вниз.
+ * - журнал приходит как поток строк из viewModel;
+ * - в UI поток собирается в список (не более 2000 строк);
+ * - при добавлении новой строки список автоматически прокручивается вниз.
  */
 @RequiresApi(Build.VERSION_CODES.S)
 @OptIn(ExperimentalMaterial3Api::class)
@@ -67,26 +69,19 @@ fun AppRoot() {
     val viewModel = hiltViewModel<UiViewModel>()
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    val logs by viewModel.logs.collectAsStateWithLifecycle(emptyList())
-    val listState = rememberLazyListState()
-
-    LaunchedEffect(logs.size) {
-        if (logs.isNotEmpty()) listState.scrollToItem(logs.lastIndex)
-    }
+    val logUi = rememberLogsUi(viewModel.logs)
 
     val runWithBlePerms = rememberRunWithPeripheralBlePerms(
         appContext = appContext,
-        log = { log ->
-            viewModel.appendLog(log)
-        },
+        log = { line -> viewModel.appendLog(line) },
         onEvent = { viewModel.onEvent(it) }
     )
 
     AppScreen(
         state = state,
-        logs = logs,
-        listState = listState,
-        onClearLog = { viewModel.onEvent(UiEvent.ClearLog) },
+        logs = logUi.logs,
+        listState = logUi.listState,
+        onClearLog = { logUi.logs.clear() },
         onStartServer = { runWithBlePerms(UiEvent.StartServer) },
         onStopServer = { viewModel.onEvent(UiEvent.StopServer) },
         onStartTransfer = { viewModel.onEvent(UiEvent.StartTransfer) },
@@ -109,6 +104,11 @@ fun AppRoot() {
  * - Start Server / Stop Server — запуск и остановка GATT-сервера и рекламы;
  * - Start TX / Stop TX — управление отправкой данных;
  * - Clear log — очистка журнала.
+ *
+ * Параметры:
+ * - [state] — текущее состояние периферийной части;
+ * - [logs] и [listState] — данные и состояние прокрутки журнала;
+ * - остальные параметры — обработчики кнопок.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -156,10 +156,9 @@ private fun AppScreen(
 /**
  * Список строк журнала.
  *
- * Назначение:
- * - отображает журнал в виде прокручиваемого списка;
- * - использует [listState], чтобы внешний код мог управлять прокруткой
- *   (автоматически прокручивать к последнему элементу).
+ * Использует [LazyColumn], чтобы эффективно отображать большое число строк.
+ * [listState] передаётся снаружи, чтобы можно было управлять прокруткой
+ * (автоматически прокручивать к последней строке).
  */
 @Composable
 private fun LogsList(logs: List<String>, listState: LazyListState) {
@@ -176,20 +175,23 @@ private fun LogsList(logs: List<String>, listState: LazyListState) {
 }
 
 /**
- * Формирует обработчик пользовательских действий, который выполняет действие только при наличии разрешений BLE.
+ * Создаёт функцию-обёртку для запуска событий интерфейса с проверкой разрешений Bluetooth.
  *
- * Назначение:
- * - проверяет наличие разрешений для Peripheral (`BLUETOOTH_ADVERTISE` и `BLUETOOTH_CONNECT` на Android 12+);
- * - если разрешений нет — запускает системный запрос и запоминает действие как отложенное;
- * - после выдачи всех разрешений выполняет отложенное действие.
+ * Логика:
+ * - если все нужные разрешения уже выданы — событие выполняется сразу;
+ * - если разрешений нет — событие запоминается как отложенное и будет выполнено
+ *   после успешной выдачи разрешений пользователем.
+ *
+ * Разрешения:
+ * - список берётся из [BlePermissions.peripheralRuntime] (`BLUETOOTH_ADVERTISE` и `BLUETOOTH_CONNECT` на Android 12+).
  *
  * Параметры:
- * - [appContext] используется для проверки разрешений;
+ * - [appContext] — используется для проверки наличия разрешений;
  * - [log] — вывод диагностических сообщений (например, результат запроса разрешений);
- * - [onEvent] — реальная обработка действия (передача события в viewModel).
+ * - [onEvent] — фактическая отправка события в viewModel.
  *
  * Возвращает:
- * - функцию вида `(UiEvent) -> Unit`, которую можно напрямую вызывать при нажатии кнопок.
+ * - функцию вида `(UiEvent) -> Unit` для последующего вызова в обработчиках нажатий кнопок.
  */
 @RequiresApi(Build.VERSION_CODES.S)
 @Composable
@@ -199,25 +201,29 @@ private fun rememberRunWithPeripheralBlePerms(
     onEvent: (UiEvent) -> Unit,
 ): (UiEvent) -> Unit {
 
-    var pending by remember { mutableStateOf<UiEvent?>(null) }
+    /* отложенное действие пользователя */
+    var pendingEvent by remember { mutableStateOf<UiEvent?>(null) }
 
-    val launcher = rememberLauncherForActivityResult(
+    /* проверяет, все ли выданы разрешения, и продолжает отложенное событие */
+    val permsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         log("permissions result: $result")
         val allGranted = result.values.all { it }
         if (allGranted) {
-            pending?.let {
-                pending = null
+            pendingEvent?.let {
+                pendingEvent = null
                 onEvent(it)
             }
         }
     }
 
-    val gate = remember(appContext) {
+    /* шлюз разрешений: хранит список нужных разрешений в requiredPerms
+    * умеет подтверждать, что все выдано, либо инициировать запрос разрешений у пользователя */
+    val permGate = remember(appContext) {
         BlePermissionGate(
             requiredPerms = BlePermissions.peripheralRuntime(),
-            request = { launcher.launch(it) },
+            request = { permsLauncher.launch(it) },
             isGranted = { perm ->
                 ContextCompat.checkSelfPermission(appContext, perm) == PackageManager.PERMISSION_GRANTED
             }
@@ -225,11 +231,59 @@ private fun rememberRunWithPeripheralBlePerms(
     }
 
     return { event ->
-        if (gate.ensurePermsOrRequest()) {
-            pending = null
+        if (permGate.ensurePermsOrRequest()) {
+            /* разрешения есть */
             onEvent(event)
+            pendingEvent = null // на всякий случай очищаем отложенное событие, чтобы потом не выполнилось
         } else {
-            pending = event
+            /* разрешений нет */
+            pendingEvent = event // отклыдываем и выполним позже
         }
     }
+}
+
+/**
+ * Состояние журнала для интерфейса.
+ *
+ * Содержит:
+ * - [logs] — список строк журнала, который изменяется по мере поступления новых сообщений;
+ * - [listState] — состояние прокрутки списка журнала.
+ */
+@Stable
+private class LogsUiState(
+    val logs: MutableList<String>,
+    val listState: LazyListState,
+)
+
+/**
+ * Подписывается на поток строк журнала и накапливает их в списке для отображения.
+ *
+ * Поведение:
+ * - каждую пришедшую строку добавляет в `logs`;
+ * - ограничивает размер журнала (не более 2000 строк), чтобы уменьшить расход памяти;
+ * - прокручивает список вниз к последней строке.
+ *
+ * Параметры:
+ * - [logsFlow] — поток строк журнала из модели представления.
+ *
+ * Возвращает:
+ * - [LogsUiState], содержащий список строк и состояние прокрутки.
+ */
+@Composable
+private fun rememberLogsUi(logsFlow: Flow<String>): LogsUiState {
+    val logs = remember { mutableStateListOf<String>() }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(logsFlow) {
+        logsFlow.collect { line ->
+            logs.add(line)
+            if (logs.size > 2000) logs.removeRange(0, logs.size - 2000)
+            scope.launch {
+                if (logs.isNotEmpty()) listState.scrollToItem(logs.lastIndex)
+            }
+        }
+    }
+
+    return remember { LogsUiState(logs, listState) }
 }

@@ -32,38 +32,126 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
-import kotlin.math.log
 
+/**
+ * BLE-периферийная часть: реклама (Advertising) + GATT-сервер + потоковая отправка данных.
+ *
+ * Назначение:
+ * - поднимает GATT-сервис [BleUuids.SERVICE] с характеристиками команд и данных;
+ * - запускает рекламу, чтобы Central мог найти устройство и подключиться;
+ * - принимает записи в RX-характеристики (Central -> Peripheral);
+ * - отправляет уведомления (notify) в TX-характеристики (Peripheral -> Central);
+ * - ведёт учёт подключённых устройств и подписок на уведомления;
+ * - публикует реактивное состояние [state] для UI.
+ *
+ * Потоки и безопасность:
+ * - обратные вызовы GATT приходят из системных потоков;
+ * - множества [connected], [subscribedCmd], [subscribedData] — потокобезопасные (ConcurrentHashMap.newKeySet);
+ * - состояние [state] обновляется через [MutableStateFlow].
+ *
+ * Протокол:
+ * - команды принимаются через CMD_RX и отдаются через CMD_TX (notify);
+ * - поток данных принимается через DATA_RX, а также может отдаваться через DATA_TX (notify);
+ * - параметры размера блока и периода берутся из [Protocol].
+ *
+ * Важно:
+ * - для корректной работы уведомлений Central обязан записать CCCD-дескриптор соответствующей TX-характеристики
+ *   (подписаться на notify).
+ */
 class AndroidBlePeripheralServer @Inject constructor (
     @ApplicationContext private val context: Context,
     private val logBus: PeripheralLogBus,
 ) {
+    /** Системный BluetoothManager, используемый для открытия GATT-сервера. */
     private val btManager = context.getSystemService(BluetoothManager::class.java)
+    /** Bluetooth-адаптер устройства. */
     private val adapter: BluetoothAdapter = btManager.adapter
 
+    /** Текущий экземпляр GATT-сервера (null, если сервер не запущен или уже остановлен). */
     private var gattServer: BluetoothGattServer? = null
+    /** Текущий экземпляр рекламодателя (null, если реклама не запущена или не поддерживается). */
     private var advertiser: BluetoothLeAdvertiser? = null
 
+    /**
+     * Набор Central-устройств, подписанных на уведомления по CMD_TX.
+     *
+     * Подписка выставляется при записи Central в CCCD-дескриптор CMD_TX.
+     */
     private val subscribedCmd = ConcurrentHashMap.newKeySet<BluetoothDevice>()
+    /**
+     * Набор Central-устройств, подписанных на уведомления по DATA_TX.
+     *
+     * Подписка выставляется при записи Central в CCCD-дескриптор DATA_TX.
+     */
     private val subscribedData = ConcurrentHashMap.newKeySet<BluetoothDevice>()
+    /**
+     * Набор подключённых Central-устройств.
+     *
+     * Заполняется и очищается по событиям [BluetoothGattServerCallback.onConnectionStateChange].
+     */
     private val connected = ConcurrentHashMap.newKeySet<BluetoothDevice>()
 
+    /**
+     * TX-характеристика для отправки команд (Peripheral -> Central) через notify.
+     * Инициализируется при создании GATT-сервера в [startGattServer].
+     */
     private lateinit var cmdTxChar: BluetoothGattCharacteristic
+    /**
+     * TX-характеристика для отправки данных (Peripheral -> Central) через notify.
+     * Инициализируется при создании GATT-сервера в [startGattServer].
+     */
     private lateinit var dataTxChar: BluetoothGattCharacteristic
 
+    /**
+     * Область выполнения для фонового трансфера данных (TX stream).
+     *
+     * Отдельная область нужна, чтобы передача не блокировала главный поток и коллбеки Bluetooth.
+     */
     private val txScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** Текущая задача передачи данных (null, если поток не запущен). */
     private var txJob: Job? = null
+    /** Счётчик последовательности для формирования блоков потока. */
     private var txSeq = 0
 
+    /** Внутреннее состояние периферийной части. */
     private val _state = MutableStateFlow(PeripheralState())
-    val state: StateFlow<PeripheralState> = _state
+    /**
+     * Поток состояния периферийной части.
+     *
+     * Используется UI для отображения:
+     * - поддержки BLE/рекламы на устройстве;
+     * - запуска сервера;
+     * - числа подключений и подписок;
+     * - последней ошибки.
+     */
+    val state: StateFlow<PeripheralState> = _state.asStateFlow()
 
+    /**
+     * Проверяет, поддерживает ли устройство режим периферии с рекламой.
+     *
+     * @return `true`, если доступен [BluetoothLeAdvertiser]; иначе `false`.
+     */
     fun isPeripheralSupported(): Boolean = adapter.bluetoothLeAdvertiser != null
 
+    /**
+     * Запускает периферийную часть: GATT-сервер и advertising.
+     *
+     * Предусловия:
+     * - устройство поддерживает рекламу (иначе фиксируется ошибка в [state]);
+     * - Bluetooth включён (иначе выбрасывается исключение).
+     *
+     * Поведение:
+     * - по возможности устанавливает имя устройства [deviceName];
+     * - создаёт GATT-сервис/характеристики и публикует сервис;
+     * - запускает рекламу с UUID сервиса [BleUuids.SERVICE];
+     * - выставляет `isRunning = true`, сбрасывает `lastError`;
+     * - публикует счётчики подключений/подписок через [publishCounters].
+     */
     @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE])
     fun start(deviceName: String = "BLE-Peripheral") {
         if (!isPeripheralSupported()) {
@@ -86,6 +174,16 @@ class AndroidBlePeripheralServer @Inject constructor (
         publishCounters()
     }
 
+    /**
+     * Останавливает периферийную часть и освобождает ресурсы Bluetooth.
+     *
+     * Поведение:
+     * - останавливает потоковую передачу [stopTransfer];
+     * - разрывает соединения со всеми подключёнными Central [disconnectAllCentrals];
+     * - останавливает рекламу и закрывает GATT-сервер;
+     * - очищает множества подписок на команды и информацию, а также подключений;
+     * - выставляет `isRunning = false` и публикует счётчики.
+     */
     @RequiresPermission(allOf = [Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE])
     fun stop() {
         stopTransfer()
@@ -112,6 +210,11 @@ class AndroidBlePeripheralServer @Inject constructor (
         publishCounters()
     }
 
+    /**
+     * Разрывает соединение со всеми подключёнными Central.
+     *
+     * Используется при остановке сервера, чтобы принудительно закрыть активные соединения.
+     */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun disconnectAllCentrals() {
         val server = gattServer ?: return
@@ -125,6 +228,19 @@ class AndroidBlePeripheralServer @Inject constructor (
     }
 
     /* Peripheral -> Central */
+    /**
+     * Запускает потоковую передачу данных (Peripheral -> Central) через уведомления DATA_TX (notify).
+     *
+     * Поведение:
+     * - если поток уже запущен, повторно задачу не создаёт;
+     * - циклически формирует блок размером [Protocol.STREAM_BLOCK_SIZE];
+     * - в первые 4 байта пишет счётчик последовательности [txSeq];
+     * - отправляет блок всем устройствам из [subscribedData];
+     * - выдерживает период [Protocol.STREAM_PERIOD_MS].
+     *
+     * Примечание:
+     * - данные реально получат только те Central, которые подписались на DATA_TX (записали CCCD).
+     */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun startTransfer() {
         /* если Transfer уже запущен, то не плодим задачи, а просто выходим */
@@ -158,16 +274,39 @@ class AndroidBlePeripheralServer @Inject constructor (
         logBus.log(message = "Peripheral TX started; subscribedData=${subscribedData.size}")
     }
 
+    /**
+     * Останавливает потоковую передачу данных, если она запущена.
+     *
+     * Поведение:
+     * - отменяет задачу передачи и очищает ссылку на неё;
+     * - пишет диагностическое сообщение в журнал.
+     */
     fun stopTransfer() {
         txJob?.cancel()
         txJob = null
         logBus.log(message = "TX stream stopped")
     }
 
+    /**
+     * Сбрасывает последнюю ошибку в [state].
+     *
+     * Используется UI, чтобы убрать отображение ошибки после ознакомления.
+     */
     fun clearError() {
         _state.value = _state.value.copy(lastError = null)
     }
 
+    /**
+     * Открывает GATT-сервер, создаёт сервис и характеристики, публикует сервис в системе.
+     *
+     * Создаваемые характеристики:
+     * - CMD_RX: запись (WRITE), принимает команды от Central;
+     * - CMD_TX: уведомления (NOTIFY), отправляет команды и ответы в Central (через notify);
+     * - DATA_RX: запись без ответа (WRITE_NO_RESPONSE), принимает поток данных от Central;
+     * - DATA_TX: уведомления (NOTIFY), отправляет поток данных в Central (через notify).
+     *
+     * Для TX-характеристик добавляется CCCD-дескриптор, чтобы Central мог подписаться на уведомления.
+     */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun startGattServer() {
         gattServer = btManager.openGattServer(context, gattCallback)
@@ -223,6 +362,13 @@ class AndroidBlePeripheralServer @Inject constructor (
         logBus.log(message = "addService: $ok")
     }
 
+    /**
+     * Запускает BLE-advertising с UUID сервиса [BleUuids.SERVICE].
+     *
+     * Поведение:
+     * - в основной рекламе размещается UUID сервиса (чтобы Central мог фильтровать по сервису);
+     * - имя устройства отдаётся в scan response (setIncludeDeviceName(true)).
+     */
     @RequiresPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
     private fun startAdvertising() {
         advertiser = adapter.bluetoothLeAdvertiser
@@ -246,6 +392,7 @@ class AndroidBlePeripheralServer @Inject constructor (
         adv.startAdvertising(settings, data, scanResponse, advCallback)
     }
 
+    /** Коллбек рекламы: фиксирует успешный старт или ошибку запуска рекламы. */
     private val advCallback = object : AdvertiseCallback() {
         override fun onStartFailure(errorCode: Int) {
             logBus.log(message = "Advertising failed: $errorCode")
@@ -257,6 +404,14 @@ class AndroidBlePeripheralServer @Inject constructor (
         }
     }
 
+    /**
+     * Коллбек GATT-сервера: управляет подключениями, подписками и обработкой входящих записей.
+     *
+     * Основные обязанности:
+     * - отслеживать подключения Central и чистить подписки при отключении;
+     * - обрабатывать запись CCCD (подписка и отписка на notify);
+     * - обрабатывать записи CMD_RX и DATA_RX.
+     */
     private val gattCallback = object : BluetoothGattServerCallback() {
 
         override fun onServiceAdded(status: Int, service: BluetoothGattService) {
@@ -275,6 +430,14 @@ class AndroidBlePeripheralServer @Inject constructor (
             publishCounters()
         }
 
+        /**
+         * Обработка записи CCCD (подписка на уведомления).
+         *
+         * Поведение:
+         * - если Central записал ENABLE_NOTIFICATION_VALUE — добавляем устройство в набор подписчиков;
+         * - если записано другое значение — считаем как отключение подписки.
+         * - при необходимости отправляем ответ GATT_SUCCESS.
+         */
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onDescriptorWriteRequest(
             device: BluetoothDevice,
@@ -301,6 +464,18 @@ class AndroidBlePeripheralServer @Inject constructor (
             }
         }
 
+        /**
+         * Обработка записи в характеристики (Central -> Peripheral).
+         *
+         * CMD_RX:
+         * - декодирует команду;
+         * - на Ping отвечает Pong через уведомление CMD_TX (если Central подписан).
+         *
+         * DATA_RX:
+         * - пишет в журнал размер;
+         * - если размер совпадает с [Protocol.STREAM_BLOCK_SIZE], может отправить данные обратно через DATA_TX
+         *   (только при подписке Central на DATA_TX).
+         */
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onCharacteristicWriteRequest(
             device: BluetoothDevice,
@@ -341,6 +516,13 @@ class AndroidBlePeripheralServer @Inject constructor (
     }
 
     /* обновляем счетчики подключенных устройств */
+    /**
+     * Публикует счётчики подключений и подписок в [state].
+     *
+     * Вызывается при изменениях:
+     * - подключение или отключение;
+     * - подписка или отписка на notify.
+     */
     private fun publishCounters() {
         _state.value = _state.value.copy(
             connectedCount = connected.size,
@@ -349,6 +531,11 @@ class AndroidBlePeripheralServer @Inject constructor (
         )
     }
 
+    /**
+     * Отправляет команду в Central через CMD_TX (notify).
+     *
+     * Команды отправляются только тем устройствам, которые подписаны на CMD_TX.
+     */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun notifyCmd(device: BluetoothDevice, cmd: Command) {
         if (!subscribedCmd.contains(device)) {
@@ -358,12 +545,27 @@ class AndroidBlePeripheralServer @Inject constructor (
         notifyCharacteristic(device, cmdTxChar, CommandCodec.encode(cmd))
     }
 
+    /**
+     * Отправляет данные в Central через DATA_TX (notify).
+     *
+     * Данные отправляются только тем устройствам, которые подписаны на DATA_TX.
+     */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun notifyData(device: BluetoothDevice, data: ByteArray) {
         if (!subscribedData.contains(device)) return
         notifyCharacteristic(device, dataTxChar, data)
     }
 
+    /**
+     * Низкоуровневая отправка уведомления по характеристике.
+     *
+     * API 33+:
+     * - используется перегрузка notifyCharacteristicChanged(..., value).
+     *
+     * До API 33:
+     * - значение кладётся в characteristic.value;
+     * - вызывается устаревшая перегрузка notifyCharacteristicChanged(...).
+     */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun notifyCharacteristic(device: BluetoothDevice, ch: BluetoothGattCharacteristic, value: ByteArray) {
         val server = gattServer ?: return
