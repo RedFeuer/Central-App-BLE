@@ -276,7 +276,7 @@ private fun rememberRunWithBlePerms(
         }
     }
 
-    /* шлюз разрешений: хранит список нужных разрешений в requiredPerms31
+    /* шлюз разрешений: хранит список нужных разрешений в requiredPerms
     * умеет подтверждать, что все выдано, либо инициировать запрос разрешений у пользователя */
     val permGate = remember(appContext) {
         BlePermissionGate(
