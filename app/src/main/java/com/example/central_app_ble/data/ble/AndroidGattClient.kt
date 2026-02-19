@@ -25,39 +25,91 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeout
 import java.util.UUID
 
+/**
+ * Клиент GATT со стороны центрального устройства (роль Central).
+ *
+ * Назначение:
+ * - устанавливает соединение GATT с периферийным устройством по его адресу;
+ * - выполняет начальную настройку канала обмена:
+ *   1) подключение;
+ *   2) получение таблицы сервисов/характеристик (discoverServices);
+ *   3) привязка нужных характеристик (bind);
+ *   4) запрос увеличенного MTU (чтобы поместился блок 160 байт);
+ *   5) включение уведомлений по характеристикам, по которым периферия шлёт данные в Central.
+ * - обеспечивает отправку команд и блоков данных в периферию.
+ *
+ * Важные детали:
+ * - адрес устройства передаётся при создании (он известен только во время работы), поэтому используется AssistedInject;
+ * - все асинхронные этапы (подключение, получение сервисов, изменение MTU, запись дескриптора) синхронизируются
+ *   через promise'ы [CompletableDeferred] и завершаются в обратных вызовах [BluetoothGattCallback];
+ * - при разрыве соединения публикуется событие [GattEvent.Disconnected] в [GattEventBus],
+ *   чтобы репозиторий мог обновить [BleRepository.connectionState].
+ */
 class AndroidGattClient @AssistedInject constructor(
     @ApplicationContext private val context: Context,
     @Assisted("address") address: String,
     private val bus: GattEventBus,
 ) {
+    /** Устройство Bluetooth, полученное по адресу. */
     private val device: BluetoothDevice =
         BluetoothAdapter.getDefaultAdapter().getRemoteDevice(address)
 
-    /* клиентская сессия со стороны Central
-    * сообщение на уровне Central (клиент) <-> Peripheral (сервер)*/
+
+    /**
+     * Текущая сессия GATT со стороны Central.
+     *
+     * `null` означает, что соединение не установлено или уже закрыто.
+     */
     private var gatt: BluetoothGatt? = null
 
     /* TX - Transmit
     * RX - Receive */
 
-    /* куда Central пишет команды */
+    /**
+     * Характеристики пользовательского протокола:
+     *
+     * - [cmdRx] — характеристика, куда Central записывает команды (Central -> Peripheral).
+     * - [cmdTx] — характеристика, по которой Peripheral присылает команды/события в Central через уведомления notify.
+     * - [dataRx] — характеристика, куда Central записывает поток данных (Central -> Peripheral).
+     * - [dataTx] — характеристика, по которой Peripheral присылает поток данных в Central через уведомления notify.
+     */
     private var cmdRx: BluetoothGattCharacteristic? = null
-    /* откуда Peripheral шлет события через notify */
     private var cmdTx: BluetoothGattCharacteristic? = null
-    /* куда Central пишет потоко данных */
     private var dataRx: BluetoothGattCharacteristic? = null
-    /* откуда Peripheral шлет поток данных через notify */
     private var dataTx: BluetoothGattCharacteristic? = null
 
-    /* promise'ы */
+    /**
+     * Promise'ы для этапов начальной настройки.
+     *
+     * Заполняются в обратных вызовах [callback].
+     */
     private val connected = CompletableDeferred<Unit>()
     private val servicesDiscovered = CompletableDeferred<Unit>()
     private val mtuChanged = CompletableDeferred<Int>()
+
+    /**
+     * Promise записи дескриптора (CCCD) для включения уведомлений.
+     */
     private var descWriteWaiter: CompletableDeferred<Pair<UUID, Int>>? = null
 
+    /**
+     * Обработчик событий GATT.
+     *
+     * Роль:
+     * - завершает ожидатели этапов настройки (connected/servicesDiscovered/mtuChanged/descWriteWaiter);
+     * - принимает уведомления от периферии и поднимает их наверх через [GattEventBus];
+     * - при разрыве соединения завершает все ожидатели ошибкой и публикует событие разрыва.
+     */
     private val callback = object : BluetoothGattCallback() {
 
-        /* callback для connected */
+        /**
+         * Изменение состояния соединения.
+         *
+         * - при успешном подключении завершает [connected] (callback);
+         * - при разрыве/ошибке:
+         *   - завершает все ожидатели ошибкой, чтобы [connectAndInit] не висел до таймаута;
+         *   - публикует событие разрыва в [bus.disconnected].
+         */
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             bus.log("connState status=$status newState=$newState")
 
@@ -84,33 +136,60 @@ class AndroidGattClient @AssistedInject constructor(
             }
         }
 
-        /* callback для servicesDiscovered */
+        /**
+         * Завершение получения таблицы сервисов/характеристик (discoverServices).
+         *
+         * При успехе завершает [servicesDiscovered] (callback).
+         * При неудаче ожидание завершится по таймауту в [connectAndInit].
+         */
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             bus.log("servicesDiscovered status=$status")
             if (status == BluetoothGatt.GATT_SUCCESS) servicesDiscovered.complete(Unit)
         }
 
-        /* callback для mtuChanged */
+        /**
+         * Завершение изменения MTU.
+         *
+         * При успехе завершает [mtuChanged] значением MTU (callback).
+         * При неуспехе ожидание завершится по таймауту в [connectAndInit].
+         */
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
             bus.log("mtuChanged mtu=$mtu status=$status")
             if (status == BluetoothGatt.GATT_SUCCESS) mtuChanged.complete(mtu)
         }
 
+        /**
+         * Завершение записи дескриптора (CCCD для включения уведомлений).
+         *
+         * Завершает [descWriteWaiter] парой (UUID характеристики, статус записи).
+         */
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             bus.log("descWrite char=${descriptor.characteristic.uuid} status=$status")
             descWriteWaiter?.complete(descriptor.characteristic.uuid to status)
             descWriteWaiter = null
         }
 
+        /**
+         * Уведомления (старый вариант обратного вызова, где значение берётся из characteristic.value).
+         */
         override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             @Suppress("DEPRECATION")
             handleNotify(characteristic, characteristic.value ?: byteArrayOf())
         }
 
+        /**
+         * Уведомления (новый вариант обратного вызова, где значение приходит отдельным параметром).
+         */
         override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             handleNotify(characteristic, value)
         }
 
+        /**
+         * Обработка уведомлений с Peripheral устройства.
+         *
+         * - по [BleUuids.CMD_TX] декодирует команду и публикует [BleNotification.Cmd];
+         * - по [BleUuids.DATA_TX] публикует [BleNotification.Data].
+         */
         private fun handleNotify(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             when (characteristic.uuid) {
                 BleUuids.CMD_TX -> {
@@ -126,6 +205,24 @@ class AndroidGattClient @AssistedInject constructor(
         }
     }
 
+    /**
+     * Подключается к устройству и выполняет начальную настройку канала обмена.
+     *
+     * Шаги:
+     * 1) проверка разрешения BLUETOOTH_CONNECT (для Android 12+);
+     * 2) создание соединения GATT через [BluetoothDevice.connectGatt];
+     * 3) ожидание успешного подключения ([connected]);
+     * 4) запрос таблицы сервисов (discoverServices) и ожидание результата ([servicesDiscovered]);
+     * 5) привязка характеристик протокола (bind);
+     * 6) запрос MTU=247 и проверка, что фактический MTU ≥ 163 (чтобы передавать 160 байт);
+     * 7) включение уведомлений по [cmdTx] и [dataTx] через запись CCCD.
+     *
+     * Ошибки:
+     * - при превышении таймаутов ожидания этапов;
+     * - если обязательные элементы GATT не найдены (сервис, характеристики, CCCD);
+     * - если MTU слишком мал;
+     * - если запись CCCD/характеристики не стартовала или завершилась с ошибкой.
+     */
     @SuppressLint("SupportAnnotationUsage")
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     suspend fun connectAndInit() {
@@ -159,6 +256,12 @@ class AndroidGattClient @AssistedInject constructor(
         bus.log("notify enabled DATA_TX")
     }
 
+    /**
+     * Закрывает соединение GATT и освобождает ресурсы.
+     *
+     * Примечание:
+     * - безопасно вызывать повторно: после закрытия [gatt] становится `null`.
+     */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun close() {
         checkConnectPermission()
@@ -166,6 +269,12 @@ class AndroidGattClient @AssistedInject constructor(
         gatt = null
     }
 
+    /**
+     * Записывает команду в характеристику команд (Central -> Peripheral).
+     *
+     * Предусловие:
+     * - вызван [connectAndInit] и успешно выполнена [bind], иначе [cmdRx] будет отсутствовать.
+     */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun writeCmd(value: ByteArray) {
         val characteristic = cmdRx ?: error("CMD_RX missing")
@@ -173,12 +282,27 @@ class AndroidGattClient @AssistedInject constructor(
     }
 
     /* Central -> Peripheral */
+    /**
+     * Записывает блок потока данных в характеристику данных (Central -> Peripheral) без подтверждения.
+     *
+     * Предусловие:
+     * - вызван [connectAndInit] и успешно выполнена [bind], иначе [dataRx] будет отсутствовать.
+     *
+     * Примечание:
+     * - запись без подтверждения используется для потока данных, чтобы уменьшить задержки.
+     */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun writeDataNoResp(value: ByteArray) {
         val characteristic = dataRx ?: error("DATA_RX missing")
         write(characteristic, value, withResponse = false)
     }
 
+    /**
+     * Находит пользовательский (Peripheral) сервис и необходимые характеристики протокола.
+     *
+     * Ошибка:
+     * - если сервис или одна из характеристик отсутствуют.
+     */
     private fun bind() {
         /* ищем сервис, который Central получил от Peripheral после discoverService() */
         val g = gatt ?: error("no gatt")
@@ -191,6 +315,17 @@ class AndroidGattClient @AssistedInject constructor(
         dataTx = service.getCharacteristic(BleUuids.DATA_TX) ?: error("DATA_TX missing")
     }
 
+    /**
+     * Включает уведомления по характеристике.
+     *
+     * Делает две вещи:
+     * 1) включает уведомления на стороне телефона через [BluetoothGatt.setCharacteristicNotification];
+     * 2) записывает дескриптор CCCD (Client Characteristic Configuration Descriptor),
+     *    чтобы периферийное устройство начало присылать уведомления.
+     *
+     * Синхронизация:
+     * - ожидает завершение записи CCCD через [onDescriptorWrite] с таймаутом.
+     */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private suspend fun enableNotify(characteristic: BluetoothGattCharacteristic) {
         val g = gatt ?: error("no gatt")
@@ -223,6 +358,18 @@ class AndroidGattClient @AssistedInject constructor(
     }
 
     /* используется writeCmd и write(Central -> Peripheral) */
+    /**
+     * Низкоуровневая запись в характеристику (Central -> Peripheral).
+     *
+     * Параметры:
+     * - [withResponse] определяет тип записи:
+     *   - `true` — запись с подтверждением (надежнее, но медленнее);
+     *   - `false` — запись без подтверждения (быстрее для потока).
+     *
+     * Примечание по версиям Android:
+     * - на Android 13+ используется вариант API, где значение передаётся параметром;
+     * - на более старых версиях значение записывается в поле characteristic.value.
+     */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private fun write(characteristic: BluetoothGattCharacteristic, value: ByteArray, withResponse: Boolean) {
         val g = gatt ?: error("no gatt")
@@ -243,6 +390,12 @@ class AndroidGattClient @AssistedInject constructor(
         require(started) { "writeCharacteristic start failed uuid=${characteristic.uuid}" }
     }
 
+    /**
+     * Проверяет наличие разрешения BLUETOOTH_CONNECT для Android 12+.
+     *
+     * Ошибка:
+     * - если разрешение не выдано — выбрасывает исключение.
+     */
     private fun checkConnectPermission() {
         if (Build.VERSION.SDK_INT < 31) return
         val ok = context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==

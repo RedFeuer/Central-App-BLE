@@ -44,6 +44,16 @@ import com.example.shared.BlePermissionGate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 
+/**
+ * Корневой компонент интерфейса приложения центрального BLE.
+ *
+ * Ответственность:
+ * - получает [UiViewModel] через внедрение зависимостей;
+ * - подписывается на [UiState] с учётом жизненного цикла;
+ * - собирает поток строк лога в список для отображения;
+ * - оборачивает пользовательские действия в проверку разрешений Bluetooth;
+ * - передаёт состояние и обработчики событий в [AppScreen].
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppRoot() {
@@ -77,6 +87,14 @@ fun AppRoot() {
     )
 }
 
+/**
+ * Экран управления Central BLE: команды + состояние + журнал событий.
+ *
+ * Входные параметры:
+ * - [state] — текущее состояние интерфейса;
+ * - [logs] и [listState] — данные и состояние прокрутки журнала;
+ * - остальные параметры — обработчики нажатий кнопок.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppScreen(
@@ -141,6 +159,14 @@ private fun AppScreen(
     }
 }
 
+/**
+ * Шапка экрана: отображает выбранное устройство и признаки текущего состояния.
+ *
+ * Показывает:
+ * - выбранное устройство (имя и адрес), если оно есть;
+ * - состояние соединения;
+ * - признак запущенного потока данных со стороны центрального устройства.
+ */
 @Composable
 private fun Header(state: UiState) {
     Text("Selected: ${state.selected?.name ?: "—"} / ${state.selected?.address ?: "—"}")
@@ -148,6 +174,15 @@ private fun Header(state: UiState) {
     Text("Central stream: ${if (state.isCentralStreaming) "ON" else "OFF"}")
 }
 
+/**
+ * Унифицированный ряд из двух кнопок одинаковой ширины.
+ *
+ * Параметры:
+ * - [leftText], [onLeft] — подпись и действие для левой кнопки;
+ * - [rightText], [onRight] — подпись и действие для правой кнопки;
+ * - [rightOutlined] — если true, правая кнопка рисуется контурной
+ *   (удобно для опасных действий типа "Disconnect" или "ClearLog").
+ */
 @Composable
 private fun TwoButtonsRow(
     leftText: String,
@@ -176,6 +211,13 @@ private fun TwoButtonsRow(
     }
 }
 
+/**
+ * Список строк журнала.
+ *
+ * Использует [LazyColumn], чтобы эффективно отображать большое число строк.
+ * [listState] передаётся снаружи, чтобы можно было управлять прокруткой
+ * (работает автопрокрутка к последней строке при добавлении новых записей).
+ */
 @Composable
 private fun LogsList(
     logs: List<String>,
@@ -193,7 +235,22 @@ private fun LogsList(
     }
 }
 
-/* разрешения и отложенные события */
+/**
+ * Создаёт функцию-обёртку для запуска событий интерфейса с проверкой разрешений Bluetooth.
+ *
+ * Логика:
+ * - если все нужные разрешения уже выданы — событие выполняется сразу;
+ * - если разрешений нет — событие запоминается как отложенное и будет выполнено
+ *   после успешной выдачи разрешений пользователем.
+ *
+ * Параметры:
+ * - [appContext] — используется для проверки наличия разрешений;
+ * - [log] — вывод диагностических сообщений;
+ * - [onEvent] — фактическая отправка события в модель представления.
+ *
+ * Возвращает:
+ * - функцию вида `(UiEvent) -> Unit` для последующего вызова в обработчиках нажатий кнопок.
+ */
 @Composable
 private fun rememberRunWithBlePerms(
     appContext: Context,
@@ -219,6 +276,8 @@ private fun rememberRunWithBlePerms(
         }
     }
 
+    /* шлюз разрешений: хранит список нужных разрешений в requiredPerms31
+    * умеет подтверждать, что все выдано, либо инициировать запрос разрешений у пользователя */
     val permGate = remember(appContext) {
         BlePermissionGate(
             requiredPerms31 = arrayOf(
@@ -245,6 +304,13 @@ private fun rememberRunWithBlePerms(
     }
 }
 
+/**
+ * Состояние журнала для интерфейса.
+ *
+ * Содержит:
+ * - [logs] — список строк журнала, который изменяется по мере поступления новых сообщений;
+ * - [listState] — состояние прокрутки списка журнала.
+ */
 @Stable
 private class LogsUiState(
     val logs: MutableList<String>,
@@ -252,6 +318,20 @@ private class LogsUiState(
 )
 
 /* сбор логов из viewModel */
+/**
+ * Подписывается на поток строк журнала и накапливает их в списке для отображения.
+ *
+ * Поведение:
+ * - каждую пришедшую строку добавляет в `logs`;
+ * - ограничивает размер журнала (не более 2000 строк), чтобы уменьшить расход памяти;
+ * - прокручивает список вниз к последней строке.
+ *
+ * Параметры:
+ * - [logsFlow] — поток сообщений журнала из модели представления.
+ *
+ * Возвращает:
+ * - [LogsUiState], содержащий список строк и состояние прокрутки.
+ */
 @Composable
 private fun rememberLogsUi(logsFlow: Flow<String>) : LogsUiState {
     val logs = remember { mutableStateListOf<String>() }
