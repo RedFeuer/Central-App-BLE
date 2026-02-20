@@ -102,7 +102,6 @@ class UiViewModel @Inject constructor (
      * Поведение:
      * - добавляет [line] в конец журнала;
      * - оставляет только последние 2000 строк.
-     *
      */
     fun appendLog(line: String) {
         _logs.tryEmit(line)
