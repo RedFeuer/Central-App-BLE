@@ -102,6 +102,11 @@ class AndroidGattClient @AssistedInject constructor(
      */
     private val callback = object : BluetoothGattCallback() {
 
+        /* этот метод помогает определить, что соединение между устройствами разорвалось */
+        override fun onServiceChanged(gatt: BluetoothGatt) {
+            bus.log("DISCONNECT")
+        }
+
         /**
          * Изменение состояния соединения.
          *
