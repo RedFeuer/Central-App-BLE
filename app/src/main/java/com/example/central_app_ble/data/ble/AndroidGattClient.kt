@@ -79,6 +79,25 @@ class AndroidGattClient @AssistedInject constructor(
     private var dataTx: BluetoothGattCharacteristic? = null
 
     /**
+     * Флаг: выполняется сопряжение и начальная инициализация GATT-сервера.
+     *
+     * Потокобезопасность:
+     * - помечен [Volatile], потому что читается и меняется из разных потоков:
+     *   - корутина `connectAndInit()` (поток выполнения корутины),
+     *   - системные обратные вызовы `BluetoothGattCallback` (другие потоки).
+     */
+    @Volatile private var initInProgress: Boolean = false
+    /**
+     * Флаг: соединение полностью готово для передачи команд и данных.
+     *
+     * Потокобезопасность:
+     * - помечен [Volatile], потому что читается и меняется из разных потоков
+     *   - корутина `connectAndInit()` (поток выполнения корутины),
+     *   - системные обратные вызовы `BluetoothGattCallback` (другие потоки).
+     */
+    @Volatile private var ready: Boolean = false
+
+    /**
      * Promise'ы для этапов начальной настройки.
      *
      * Заполняются в обратных вызовах [callback].
@@ -102,16 +121,67 @@ class AndroidGattClient @AssistedInject constructor(
      */
     private val callback = object : BluetoothGattCallback() {
 
-        /* этот метод помогает определить, что соединение между устройствами разорвалось */
-        override fun onServiceChanged(gatt: BluetoothGatt) {
-            bus.log("DISCONNECT")
+        /* этот метод помогает определить, что соединение между устройствами разорвалось
+        * при этом он тригерится и при базовом сопряжении + коннекте - отдельная обработка
+        *
+        * здесь нужно поменять состояние, чтобы оно обновилось в UI
+        *
+        * ЭТОТ МЕТОД ПОЯВИЛСЯ ПОСЛЕ SDK 31. не знаю как запустится на Android 10, НАДО ПРОВЕРИТЬ*/
+
+        /**
+         * Сигнал от системы: на периферийном устройстве изменилась таблица сервисов, характеристик (GATT database).
+         *
+         * Что это означает:
+         * - кэш сервисов, характеристик на Central может стать неактуальным;
+         * - после этого требуется заново выполнить `discoverServices()` и повторно привязать характеристики и уведомления.
+         *
+         * Зачем этот callback используется в данном проекте:
+         * - на практике он помогает сбросить ложное состояние соединения Ready, когда Peripheral-сервер
+         *   был остановлен и перезапущен, а Central формально ещё считает соединение установленным;
+         * - в таком случае мы принудительно закрываем текущий GATT и сообщаем наверх о разрыве,
+         *   чтобы UI перешёл из Ready в Disconnected, а затем в Idle и затем прошёл повторную инициализацию.
+         *
+         * Примечание:
+         * - callback может вызываться во время первичного подключения и инициализации (в том числе при `discoverServices`);
+         *   поэтому при [initInProgress] событие считается нормальным и не приводит к принудительному реконнекту.
+         *
+         * Совместимость:
+         * - метод доступен начиная с API 31 (Android 12). На Android 10 не будет вызван.
+         */
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        override fun onServiceChanged(g: BluetoothGatt) {
+            bus.log("Service Changed: GATT database changed on peripheral")
+
+            /* обработка ситуации при сопряжении и инициализации - здесь все нормально */
+            if (initInProgress) {
+                bus.log("Service Changed during init: it's ok")
+                return
+            }
+
+            /* обработка ситуации при остановке Peripheral сервера
+            * при подключенном к нему Central приложении */
+            if (ready) {
+                clearCharacteristics() // чистим характеристики, чтобы при следующем коннекте присвоить новые
+                ready = false // сбрасовыем до значения по умолчанию
+                bus.log("Service Changed while the connection was already established (Ready): closing GATT and forcing reconnect ")
+
+                /* закрываем GATT сервер на Central */
+                runCatching { g.close() }
+                gatt = null
+
+                /* переводим ConnState из Ready в Disconnected -> Init */
+                bus.disconnected(BluetoothGatt.GATT_FAILURE, BluetoothProfile.STATE_DISCONNECTED)
+            }
         }
 
         /**
-         * Изменение состояния соединения.
+         * Изменение состояния соединения GATT.
          *
-         * - при успешном подключении завершает [connected] (callback);
+         * Поведение:
+         * - при успешном подключении (`GATT_SUCCESS` + `STATE_CONNECTED`) завершает ожидатель [connected];
          * - при разрыве/ошибке:
+         *   - сбрасывает флаг готовности [ready];
+         *   - сбрасывает характеристики через [clearCharacteristics], чтобы при переподключении не писать в старые;
          *   - завершает все ожидатели ошибкой, чтобы [connectAndInit] не висел до таймаута;
          *   - публикует событие разрыва в [bus.disconnected].
          */
@@ -127,6 +197,9 @@ class AndroidGattClient @AssistedInject constructor(
             /* ошибка соединения или намеренный дисконект */
             val disconnected = newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS
             if (disconnected) {
+                clearCharacteristics() // чистим характеристики, чтобы при следующем коннекте присвоить новые
+                ready = false // сбрасываем в значение по умолчанию
+
                 val exception = IllegalStateException("GATT disconnected status=$status newState=$newState")
 
                 /* если connectAndInit() сейчас ждет - то пусть падает, а не ждет до timeoutMs */
@@ -218,9 +291,15 @@ class AndroidGattClient @AssistedInject constructor(
      * 2) создание соединения GATT через [BluetoothDevice.connectGatt];
      * 3) ожидание успешного подключения ([connected]);
      * 4) запрос таблицы сервисов (discoverServices) и ожидание результата ([servicesDiscovered]);
-     * 5) привязка характеристик протокола (bind);
+     * 5) привязка характеристик протокола (`bind`);
      * 6) запрос MTU=247 и проверка, что фактический MTU ≥ 163 (чтобы передавать 160 байт);
      * 7) включение уведомлений по [cmdTx] и [dataTx] через запись CCCD.
+     *
+     * Флаги состояния:
+     * - в начале устанавливает [initInProgress] = true, чтобы обратные вызовы могли отличать "идёт инициализация”
+     *   от ситуации, когда соединение уже установлено;
+     * - устанавливает [ready] = true только после успешного завершения всех шагов;
+     * - в `finally` всегда сбрасывает [initInProgress] в false, даже если произошла ошибка или таймаут.
      *
      * Ошибки:
      * - при превышении таймаутов ожидания этапов;
@@ -233,45 +312,68 @@ class AndroidGattClient @AssistedInject constructor(
     suspend fun connectAndInit() {
         checkConnectPermission() // проверка permission'ов
 
-        /* создание GATT соединения
-        * события подключения придут в callback в другом потоке (асинхронно) */
-        val g = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
-        gatt = g
+        initInProgress = true // началось сопряжение и инициализация
+        ready = false // на этом этапе пока не установлено соединение для передачи команд и данных
+        try {
+            /* создание GATT соединения
+            * события подключения придут в callback в другом потоке (асинхронно) */
+            val g = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+            gatt = g
 
-        /* ждем возврата connected.complete(Unit) или истечения времени из onConnectionStateChange() */
-        withTimeout(10_000) { connected.await() }
+            /* ждем возврата connected.complete(Unit) или истечения времени из onConnectionStateChange() */
+            withTimeout(10_000) { connected.await() }
 
-        /* ждем возврата servicesDiscovered.complete(Unit) или истечения времени из onServicesDiscovered
-        * составление таблицы атрибутов на Peripheral (Gatt Server) */
-        if (!g.discoverServices()) error("discoverServices() false")
-        withTimeout(10_000) { servicesDiscovered.await() }
+            /* ждем возврата servicesDiscovered.complete(Unit) или истечения времени из onServicesDiscovered
+            * составление таблицы атрибутов на Peripheral (Gatt Server) */
+            if (!g.discoverServices()) error("discoverServices() false")
+            withTimeout(10_000) { servicesDiscovered.await() }
 
-        bind() // получаем GATT характеристики Peripheral устройства
+            bind() // получаем GATT характеристики Peripheral устройства
 
-        /* ждем возврата mtuChanged.complete(mtu) или истечения времени для onMtuChanged() */
-        g.requestMtu(247) // 163 байта точно влезет
-        val mtu = withTimeout(10_000) { mtuChanged.await() }
-        require(mtu >= 163) { "MTU=$mtu слишком мал для 160 байт" }
+            /* ждем возврата mtuChanged.complete(mtu) или истечения времени для onMtuChanged() */
+            g.requestMtu(247) // 163 байта точно влезет
+            val mtu = withTimeout(10_000) { mtuChanged.await() }
+            require(mtu >= 163) { "MTU=$mtu слишком мал для 160 байт" }
 
-        /* подписка на уведомления от Peripheral*/
-        enableNotify(cmdTx!!) // чтобы Central получал команды Peripheral -> Central (Pong)
-        enableNotify(dataTx!!) // чтобы Cental получал данные  Peripheral -> Central
+            /* подписка на уведомления от Peripheral*/
+            enableNotify(cmdTx!!) // чтобы Central получал команды Peripheral -> Central (Pong)
+            enableNotify(dataTx!!) // чтобы Cental получал данные  Peripheral -> Central
 
-        bus.log("notify enabled CMD_TX")
-        bus.log("notify enabled DATA_TX")
+            bus.log("notify enabled CMD_TX")
+            bus.log("notify enabled DATA_TX")
+
+            ready = true // коннект установлен и готова передача команд и данных
+        }
+        finally {
+            initInProgress = false // сбрасываем до значения по умолчанию
+        }
     }
 
     /**
      * Закрывает соединение GATT и освобождает ресурсы.
+     *
+     * Поведение:
+     * - очищает ссылки на характеристики через [clearCharacteristics], чтобы при следующем подключении
+     *   характеристики были получены заново в `bind` и не использовались “старые” объекты;
+     * - закрывает текущий [gatt] и сбрасывает ссылку на него;
+     * - сбрасывает флаги [initInProgress] и [ready] в исходные значения.
      *
      * Примечание:
      * - безопасно вызывать повторно: после закрытия [gatt] становится `null`.
      */
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     fun close() {
+        /* чистим характеристики, чтобы при следующем коннекте присвоить новые */
         checkConnectPermission()
+
+        /*  */
+        clearCharacteristics()
         gatt?.close()
         gatt = null
+
+        /* сброс в исходное состояние */
+        initInProgress = false
+        ready = false
     }
 
     /**
@@ -300,6 +402,22 @@ class AndroidGattClient @AssistedInject constructor(
     fun writeDataNoResp(value: ByteArray) {
         val characteristic = dataRx ?: error("DATA_RX missing")
         write(characteristic, value, withResponse = false)
+    }
+
+    /**
+     * Сбрасывает ссылки на характеристики, полученные в [bind].
+     *
+     * Что делает :
+     * - очищает поля `cmdRx`, `cmdTx`, `dataRx`, `dataTx`, которые указывают на объекты характеристик текущей GATT-сессии.
+     *
+     * Зачем это нужно в данном проекте:
+     * - после разрыва соединения, закрытия GATT или смены таблицы сервисов (GATT database changed)
+     *   старые объекты характеристик больше нельзя считать валидными;
+     * - сброс гарантирует, что при следующем подключении характеристики будут заново найдены в [bind],
+     *   и мы не попопытаемся писать и включать уведомления через старые ссылки.
+     */
+    private fun clearCharacteristics() {
+        cmdRx = null; cmdTx = null; dataRx = null; dataTx = null
     }
 
     /**
