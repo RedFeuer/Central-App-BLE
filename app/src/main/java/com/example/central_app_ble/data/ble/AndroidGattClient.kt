@@ -146,7 +146,7 @@ class AndroidGattClient @AssistedInject constructor(
          *   поэтому при [initInProgress] событие считается нормальным и не приводит к принудительному реконнекту.
          *
          * Совместимость:
-         * - метод доступен начиная с API 31 (Android 12). На Android 10 не будет вызван.
+         * - метод доступен начиная с API 31 (Android 12). На Android 11 и ниже не будет вызван.
          */
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onServiceChanged(g: BluetoothGatt) {
