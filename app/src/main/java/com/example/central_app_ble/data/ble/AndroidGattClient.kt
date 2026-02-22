@@ -124,7 +124,7 @@ class AndroidGattClient @AssistedInject constructor(
                 return
             }
 
-            /* ошибка соединения */
+            /* ошибка соединения или намеренный дисконект */
             val disconnected = newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS
             if (disconnected) {
                 val exception = IllegalStateException("GATT disconnected status=$status newState=$newState")
