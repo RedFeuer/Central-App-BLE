@@ -206,8 +206,8 @@ class BleRepositoryImpl @Inject constructor (
      *
      * Метод безопасен при повторном вызове.
      */
-    private fun closeGatt() {
-        runCatching { gattClient?.close() }
+    private suspend fun closeGatt() {
+        runCatching { gattClient?.disconncectAndClose() }
         gattClient = null
     }
 
@@ -219,7 +219,7 @@ class BleRepositoryImpl @Inject constructor (
      * - закрывает активное GATT-соединение (если оно есть);
      * - переводит [connectionState] в [ConnectionState.Idle].
      */
-    override fun disconnect() {
+    override suspend fun disconnect() {
         closeGatt()
         setState(ConnectionState.Idle)
     }

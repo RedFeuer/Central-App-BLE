@@ -75,7 +75,7 @@ interface BleRepository {
      * - закрывает активное GATT-соединение (если оно есть);
      * - переводит [connectionState] в [ConnectionState.Idle].
      */
-    fun disconnect()
+    suspend fun disconnect()
 
     /**
      * Отправляет команду в подключённое устройство.
