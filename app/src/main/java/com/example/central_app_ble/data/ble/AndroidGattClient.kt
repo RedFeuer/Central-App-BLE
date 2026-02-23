@@ -22,6 +22,7 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import java.util.UUID
 
@@ -97,14 +98,27 @@ class AndroidGattClient @AssistedInject constructor(
      */
     @Volatile private var ready: Boolean = false
 
+    /** Флаг, что на периферийном устройстве изменилась таблица сервисов, характеристик во время сопряжения и инициализации
+     * (callback onServiceChanged может прийти во время connectAndInit).
+     *
+     * Зачем нужен:
+     * - если этот флаг поднят, то после первого discoverServices мы делаем один повторный discoverServices,
+     *   чтобы получить актуальную таблицу атрибутов и избежать ошибки 147 "service not found".
+     *
+     * @Volatile потому что флаг читается и пишется из разных потоков:
+     * - корутина connectAndInit()
+     * - системные callback BluetoothGattCallback*/
+    @Volatile private var serviceChangedDuringInit: Boolean = false
+
     /**
      * Promise'ы для этапов начальной настройки.
      *
      * Заполняются в обратных вызовах [callback].
      */
     private val connected = CompletableDeferred<Unit>()
-    private val servicesDiscovered = CompletableDeferred<Unit>()
+    private var servicesDiscovered = CompletableDeferred<Unit>() // сделал изменяемым, чтобы решить service not found 147 во время коннектов
     private val mtuChanged = CompletableDeferred<Int>()
+    private var disconnectedWaiter = CompletableDeferred<Unit>() // для отключения GATT
 
     /**
      * Promise записи дескриптора (CCCD) для включения уведомлений.
@@ -121,12 +135,6 @@ class AndroidGattClient @AssistedInject constructor(
      */
     private val callback = object : BluetoothGattCallback() {
 
-        /* этот метод помогает определить, что соединение между устройствами разорвалось
-        * при этом он тригерится и при базовом сопряжении + коннекте - отдельная обработка
-        *
-        * здесь нужно поменять состояние, чтобы оно обновилось в UI
-        *
-        * ЭТОТ МЕТОД ПОЯВИЛСЯ ПОСЛЕ SDK 31. не знаю как запустится на Android 10, НАДО ПРОВЕРИТЬ*/
 
         /**
          * Сигнал от системы: на периферийном устройстве изменилась таблица сервисов, характеристик (GATT database).
@@ -154,6 +162,7 @@ class AndroidGattClient @AssistedInject constructor(
 
             /* обработка ситуации при сопряжении и инициализации - здесь все нормально */
             if (initInProgress) {
+                serviceChangedDuringInit = true // сервисы поменялись на этапе сопряжения и инициализации
                 bus.log("Service Changed during init: it's ok")
                 return
             }
@@ -179,6 +188,8 @@ class AndroidGattClient @AssistedInject constructor(
          *
          * Поведение:
          * - при успешном подключении (`GATT_SUCCESS` + `STATE_CONNECTED`) завершает ожидатель [connected];
+         * - при получении `STATE_DISCONNECTED` завершает [disconnectedWaiter] (если он используется), чтобы
+         *   `disconnectAndClose()` мог дождаться дисконекта;
          * - при разрыве/ошибке:
          *   - сбрасывает флаг готовности [ready];
          *   - сбрасывает характеристики через [clearCharacteristics], чтобы при переподключении не писать в старые;
@@ -192,6 +203,10 @@ class AndroidGattClient @AssistedInject constructor(
             if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
                 connected.complete(Unit)
                 return
+            }
+
+            if (newState == BluetoothProfile.STATE_DISCONNECTED && !disconnectedWaiter.isCompleted) {
+                disconnectedWaiter.complete(Unit)
             }
 
             /* ошибка соединения или намеренный дисконект */
@@ -215,14 +230,17 @@ class AndroidGattClient @AssistedInject constructor(
         }
 
         /**
-         * Завершение получения таблицы сервисов/характеристик (discoverServices).
+         * Завершение получения таблицы сервисов, характеристик (discoverServices).
          *
          * При успехе завершает [servicesDiscovered] (callback).
          * При неудаче ожидание завершится по таймауту в [connectAndInit].
          */
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             bus.log("servicesDiscovered status=$status")
-            if (status == BluetoothGatt.GATT_SUCCESS) servicesDiscovered.complete(Unit)
+            /* второе условие, чтобы callback корректно завершался */
+            if (status == BluetoothGatt.GATT_SUCCESS && !servicesDiscovered.isCompleted) {
+                servicesDiscovered.complete(Unit)
+            }
         }
 
         /**
@@ -325,10 +343,31 @@ class AndroidGattClient @AssistedInject constructor(
 
             /* ждем возврата servicesDiscovered.complete(Unit) или истечения времени из onServicesDiscovered
             * составление таблицы атрибутов на Peripheral (Gatt Server) */
-            if (!g.discoverServices()) error("discoverServices() false")
-            withTimeout(10_000) { servicesDiscovered.await() }
+            /* первое обнаружение сервисов */
+            discoverServicesAwait(g)
+            logDiscoveredServices(g, "DISCOVERY №1")
 
-            bind() // получаем GATT характеристики Peripheral устройства
+            /* флаг, означающий, что на периферийном устройстве изменилась таблица сервисов или,
+            * что GATT сервис вообще не найден */
+            /* needRetry = true, если:
+             * 1) во время init прилетал onServiceChanged (таблица GATT могла поменяться и кэш теперь неактуален),
+             * 2) или после первого discoverServices сервис всё ещё не виден (getService == null).
+             *
+             * В этом случае делаем один повторный discoverServices с небольшой паузой, чтобы избежать
+             * ошибки "service not found" в bind().
+             */
+            val needRetry = serviceChangedDuringInit || (g.getService(BleUuids.SERVICE) == null)
+            if (needRetry) {
+                serviceChangedDuringInit = false
+                bus.log("Custom service not found on ServiceChanged during init -> retry discoverServices once again")
+                delay(600)
+
+                /* второе обнаружение сервисов */
+                discoverServicesAwait(g)
+                logDiscoveredServices(g, "DISCOVERY №2")
+            }
+
+            bind() // получаем GATT характеристики Peripheral устройства и привязываем их
 
             /* ждем возврата mtuChanged.complete(mtu) или истечения времени для onMtuChanged() */
             g.requestMtu(247) // 163 байта точно влезет
@@ -374,6 +413,35 @@ class AndroidGattClient @AssistedInject constructor(
         /* сброс в исходное состояние */
         initInProgress = false
         ready = false
+    }
+
+    /**
+     * Аккуратно отключается от устройства и затем закрывает GATT-сессию.
+     *
+     * Зачем нужен:
+     * - при быстром повторном подключении это может приводить к редким “внутренним” ошибкам
+     *   вида `status=147 connected=false`;
+     * - поэтому мы сначала вызываем `disconnect()` и ждём подтверждение `STATE_DISCONNECTED`,
+     *   после чего закрываем GATT. Помогает избежать переходного состояни.
+     *
+     * Механика:
+     * - создаёт новый [disconnectedWaiter];
+     * - вызывает `gatt.disconnect()`;
+     * - ждёт `STATE_DISCONNECTED` не дольше [timeoutMs];
+     * - затем вызывает [close] (очистка характеристик, закрытие GATT, сброс флагов).
+     *
+     * @param timeoutMs максимальное время ожидания `STATE_DISCONNECTED`.
+     */
+    suspend fun disconnectAndClose(timeoutMs: Long = 2_000) {
+        checkConnectPermission()
+        val g = gatt ?: return
+        disconnectedWaiter = CompletableDeferred()
+
+        runCatching { g.disconnect() }
+
+        runCatching { withTimeout(timeoutMs) { disconnectedWaiter.await() } }
+
+        close()
     }
 
     /**
@@ -436,6 +504,27 @@ class AndroidGattClient @AssistedInject constructor(
         cmdTx = service.getCharacteristic(BleUuids.CMD_TX) ?: error("CMD_TX missing")
         dataRx = service.getCharacteristic(BleUuids.DATA_RX) ?: error("DATA_RX missing")
         dataTx = service.getCharacteristic(BleUuids.DATA_TX) ?: error("DATA_TX missing")
+    }
+
+    /**
+     * Запускает `discoverServices()` и ждёт его завершения через callback [onServicesDiscovered].
+     */
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
+    private suspend fun discoverServicesAwait(g: BluetoothGatt) {
+        servicesDiscovered = CompletableDeferred()
+        if (!g.discoverServices()) error("discoverServices() false")
+        withTimeout(10_000) { servicesDiscovered.await() }
+    }
+
+    /**
+     * Логирует список сервисов, которые Central видит после `discoverServices`.
+     *
+     * Используется для диагностики:
+     * - если список пустой или в нём нет [BleUuids.SERVICE], то bind() закономерно упадёт с "service not found".
+     */
+    private fun logDiscoveredServices(g: BluetoothGatt, tag: String) {
+        val list = g.services.joinToString(prefix = "[", postfix = "]") { it.uuid.toString() }
+        bus.log("$tag discovered services = $list")
     }
 
     /**

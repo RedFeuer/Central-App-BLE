@@ -207,7 +207,7 @@ class BleRepositoryImpl @Inject constructor (
      * Метод безопасен при повторном вызове.
      */
     private suspend fun closeGatt() {
-        runCatching { gattClient?.disconncectAndClose() }
+        runCatching { gattClient?.disconnectAndClose() }
         gattClient = null
     }
 
